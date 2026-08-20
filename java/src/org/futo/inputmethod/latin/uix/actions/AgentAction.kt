@@ -22,6 +22,7 @@ import org.futo.inputmethod.latin.uix.DialogRequestItem
 import org.futo.inputmethod.latin.uix.KeyboardManagerForAction
 import org.futo.inputmethod.latin.uix.SettingsKey
 import org.futo.inputmethod.latin.uix.getSetting
+import org.futo.inputmethod.latin.uix.setSettingBlocking
 import java.util.concurrent.TimeUnit
 
 // Prototype endpoint, reached over plain HTTP inside the encrypted Tailscale
@@ -35,6 +36,17 @@ val AGENT_KEY_TOKEN = SettingsKey(
     key = stringPreferencesKey("agent_key_token"),
     default = ""
 )
+
+// Which agent answers. Long-press the Agent key to switch.
+val AGENT_KEY_AGENT = SettingsKey(
+    key = stringPreferencesKey("agent_key_agent"),
+    default = "kimi"
+)
+
+val AGENT_CHOICES = listOf("kimi" to "Kimi", "aurora" to "Aurora", "prima" to "Prima")
+
+private fun agentDisplayName(id: String): String =
+    AGENT_CHOICES.firstOrNull { it.first == id }?.second ?: "Kimi"
 
 private val agentHttpClient = OkHttpClient.Builder()
     .connectTimeout(10, TimeUnit.SECONDS)
@@ -52,8 +64,8 @@ private fun isPasswordField(inputType: Int): Boolean {
                     variation == InputType.TYPE_NUMBER_VARIATION_PASSWORD)
 }
 
-private fun postToAgent(draft: String, token: String): String? {
-    val body = JSONObject().put("text", draft).toString()
+private fun postToAgent(draft: String, token: String, agent: String): String? {
+    val body = JSONObject().put("text", draft).put("agent", agent).toString()
         .toRequestBody("application/json; charset=utf-8".toMediaType())
     val request = Request.Builder()
         .url(AGENT_ENDPOINT)
@@ -114,6 +126,8 @@ val AgentAction = Action(
     simplePressImpl = { manager, _ ->
         val context = manager.getContext()
         val token = context.getSetting(AGENT_KEY_TOKEN).ifBlank { BuildConfig.AGENT_KEY_TOKEN }
+        val agentId = context.getSetting(AGENT_KEY_AGENT)
+        val agentName = agentDisplayName(agentId)
 
         when {
             token.isBlank() -> simpleOkDialog(
@@ -136,20 +150,20 @@ val AgentAction = Action(
                     simpleOkDialog(manager, "Type something first, then tap Agent.")
                 } else {
                     // Immediate feedback — the call takes seconds; silence reads as broken
-                    showAnswerOnStrip(manager, "⏳ Asking the agent…")
+                    showAnswerOnStrip(manager, "⏳ Asking $agentName…")
                     manager.getLifecycleScope().launch(Dispatchers.IO) {
-                        val answer = postToAgent(draft, token)
+                        val answer = postToAgent(draft, token, agentId)
 
                         withContext(Dispatchers.Main) {
                             if (answer == null) {
-                                simpleOkDialog(manager, "Agent request failed. Check connection and token.")
+                                simpleOkDialog(manager, "$agentName request failed. Check connection and token.")
                             } else {
                                 // The answer card is the primary UX — the strip is too
                                 // easy to miss (an answer there looks like a word
                                 // suggestion). Strip is a bonus, not the delivery.
                                 showAnswerOnStrip(manager, answer)
                                 manager.requestDialog(
-                                    answer,
+                                    "$agentName says:\n\n$answer",
                                     listOf(
                                         DialogRequestItem("Dismiss") {},
                                         DialogRequestItem("Insert") { manager.typeText(answer) }
@@ -162,6 +176,21 @@ val AgentAction = Action(
                 }
             }
         }
+    },
+    // Long-press: pick which agent answers (Kimi / Aurora / Prima)
+    altPressImpl = { manager, _ ->
+        val context = manager.getContext()
+        val current = context.getSetting(AGENT_KEY_AGENT)
+        manager.requestDialog(
+            "Agent answering: ${agentDisplayName(current)}\n\nTap to switch:",
+            AGENT_CHOICES.map { (id, name) ->
+                DialogRequestItem(if (id == current) "✓ $name" else name) {
+                    context.setSettingBlocking(AGENT_KEY_AGENT.key, id)
+                    showAnswerOnStrip(manager, "Agent: $name")
+                }
+            },
+            {}
+        )
     },
     windowImpl = null,
 )
