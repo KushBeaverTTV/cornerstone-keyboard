@@ -1,19 +1,19 @@
 package org.futo.voiceinput.shared.whisper
 
 import android.content.Context
-import org.futo.voiceinput.shared.ggml.WhisperGGML
+import org.futo.voiceinput.shared.ggml.SpeechEngine
 import org.futo.voiceinput.shared.types.ModelLoader
 
 
 class ModelManager(
     val context: Context
 ) {
-    private val loadedModels: HashMap<Any, WhisperGGML> = hashMapOf()
+    private val loadedModels: HashMap<Any, SpeechEngine> = hashMapOf()
 
-    fun obtainModel(model: ModelLoader): WhisperGGML {
+    fun obtainModel(model: ModelLoader): SpeechEngine {
         val key = model.key(context)
         if (!loadedModels.contains(key)) {
-            loadedModels[key] = model.loadGGML(context)
+            loadedModels[key] = model.loadEngine(context)
         }
 
         return loadedModels[key]!!

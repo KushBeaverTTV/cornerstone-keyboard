@@ -3,10 +3,20 @@ package org.futo.voiceinput.shared
 import org.futo.voiceinput.shared.types.ModelBuiltInAsset
 import org.futo.voiceinput.shared.types.ModelDownloadable
 import org.futo.voiceinput.shared.types.ModelLoader
+import org.futo.voiceinput.shared.types.ModelParakeetAsset
 
 val BUILTIN_ENGLISH_MODEL: ModelLoader = ModelBuiltInAsset(
     name = R.string.tiny_en_name,
     ggmlFile = "tiny_en_acft_q8_0.bin.not.tflite"
+)
+
+// Parakeet TDT 0.6B v2 (int8) via sherpa-onnx. English built-in voice model.
+// Model files are NOT bundled in the phone APK - they are sideloaded/adb-pushed into
+// filesDir/models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8/ (or bundled in assets
+// under the same directory name for the emulator-only test variant).
+val BUILTIN_PARAKEET_MODEL: ModelLoader = ModelParakeetAsset(
+    name = R.string.parakeet_name,
+    assetDir = "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8"
 )
 
 val ENGLISH_MODELS: List<ModelLoader> = listOf(

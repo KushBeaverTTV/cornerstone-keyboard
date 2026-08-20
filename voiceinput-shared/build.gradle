@@ -128,6 +128,11 @@ dependencies {
     implementation 'androidx.datastore:datastore-preferences:1.1.1'
 
     implementation(name:'vad-release', ext:'aar')
+    implementation(name:'sherpa-onnx-1.13.6', ext:'aar')
+
+    // OkHttp for ParakeetModelDownloader (on-device model download over Tailscale).
+    // Version matches the app module's dependency in the root build.gradle.
+    implementation 'com.squareup.okhttp3:okhttp:4.11.0'
 
     implementation 'org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.1'
 }

@@ -7,6 +7,7 @@ import kotlinx.coroutines.launch
 import org.futo.voiceinput.shared.ggml.BailLanguageException
 import org.futo.voiceinput.shared.ggml.DecodingMode
 import org.futo.voiceinput.shared.ggml.InferenceCancelledException
+import org.futo.voiceinput.shared.ggml.ParakeetSherpa
 import org.futo.voiceinput.shared.types.InferenceState
 import org.futo.voiceinput.shared.types.Language
 import org.futo.voiceinput.shared.types.ModelInferenceCallback
@@ -56,6 +57,24 @@ class MultiModelRunner(
     ): String = coroutineScope {
         callback.updateStatus(InferenceState.LoadingModel)
         val primaryModel = modelManager.obtainModel(runConfiguration.primaryModel)
+
+        // Parakeet (sherpa-onnx offline transducer) is English-only with no language
+        // detection, no prompt/glossary and no bail-language model switching.
+        // Run a single decode and skip the whisper-specific machinery below.
+        if (primaryModel is ParakeetSherpa) {
+            callback.updateStatus(InferenceState.Encoding)
+            return@coroutineScope primaryModel.infer(
+                samples = samples,
+                prompt = "",
+                languages = arrayOf(),
+                bailLanguages = arrayOf(),
+                decodingMode = DecodingMode.Greedy,
+                suppressNonSpeechTokens = false,
+                partialResultCallback = {
+                    callback.partialResult(it)
+                }
+            )
+        }
 
         val allowedLanguages = decodingConfiguration.languages.map { it.toWhisperString() }.toTypedArray()
         val bailLanguages = runConfiguration.languageSpecificModels.filter { it.value != runConfiguration.primaryModel }.keys.map { it.toWhisperString() }.toTypedArray()

@@ -520,6 +520,13 @@ class AudioRecognizer(
                         reset()
                         listener.modelLoadingFailed()
                     }
+                } catch(e: Exception) {
+                    // Parakeet path throws InvalidParakeetModelException/IOException —
+                    // never let a model failure escape the coroutine and crash the IME
+                    withContext(Dispatchers.Main) {
+                        reset()
+                        listener.modelLoadingFailed()
+                    }
                 }
             }
         }
@@ -560,6 +567,16 @@ class AudioRecognizer(
             ).trim()
         }catch(e: InferenceCancelledException) {
             yield()
+            return
+        }catch(e: Exception) {
+            // Engine failures (bad/partial model, native error) must not escape
+            yield()
+            lifecycleScope.launch {
+                withContext(Dispatchers.Main) {
+                    reset()
+                    listener.modelLoadingFailed()
+                }
+            }
             return
         }
 

@@ -67,3 +67,6 @@
 
 # Keep swipe
 -keep class org.futo.ml.inference.** { *; }
+
+# sherpa-onnx: JNI looks up classes/fields by literal name (FindClass/GetFieldID)
+-keep class com.k2fsa.sherpa.onnx.** { *; }

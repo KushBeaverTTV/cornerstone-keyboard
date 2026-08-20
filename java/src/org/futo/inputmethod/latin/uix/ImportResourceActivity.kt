@@ -73,7 +73,8 @@ import org.futo.inputmethod.latin.utils.SubtypeLocaleUtils
 import org.futo.inputmethod.latin.utils.ZipFileHelper
 import org.futo.inputmethod.latin.xlm.ModelPaths
 import org.futo.inputmethod.updates.openURI
-import org.futo.voiceinput.shared.BUILTIN_ENGLISH_MODEL
+import org.futo.voiceinput.shared.BUILTIN_PARAKEET_MODEL
+import org.futo.voiceinput.shared.ggml.ParakeetModelDownloader
 import org.futo.voiceinput.shared.types.ModelFileFile
 import org.futo.voiceinput.shared.types.ModelLoader
 import java.io.BufferedReader
@@ -536,7 +537,10 @@ fun determineFileKind(inputStream: InputStream): FileKindAndInfo {
 
 object ResourceHelper {
     val BuiltInVoiceInputFallbacks = mapOf(
-        "en" to BUILTIN_ENGLISH_MODEL
+        // English built-in is Parakeet TDT (sherpa-onnx). Sideloaded whisper .bin
+        // files still take priority via findFileForKind above and route to
+        // WhisperGGML through ModelFileFile, so both engines coexist.
+        "en" to BUILTIN_PARAKEET_MODEL
     )
 
     fun findKeyForLocaleAndKind(context: Context, locale: Locale, kind: FileKind): String? {
@@ -568,9 +572,18 @@ object ResourceHelper {
         return file
     }
 
-    fun tryFindingVoiceInputModelForLocale(context: Context, locale: Locale): ModelLoader? {
+    fun tryFindingVoiceInputModelForLocale(context: Context, locale: Locale, triggerDownload: Boolean = false): ModelLoader? {
         val file = runBlocking { findFileForKind(context, locale, FileKind.VoiceInput) }
-            ?: return BuiltInVoiceInputFallbacks[locale.language]
+            ?: return BuiltInVoiceInputFallbacks[locale.language].also { fallback ->
+                // Parakeet on-device delivery: when the built-in Parakeet fallback is
+                // used but its model files are not on disk (app-private storage has no
+                // sideload path), kick off the background downloader. ONLY from the
+                // voice-input invocation path — the settings page also calls this
+                // purely to render a name, and must never start a 600MB download.
+                if (triggerDownload && fallback === BUILTIN_PARAKEET_MODEL && !fallback.exists(context)) {
+                    ParakeetModelDownloader.downloadIfNeededAsync(context.applicationContext)
+                }
+            }
 
         return ModelFileFile(R.string.settings_external_model_name, file)
     }

@@ -46,7 +46,9 @@ import org.futo.inputmethod.latin.uix.settings.SettingsActivity
 import org.futo.inputmethod.latin.uix.utils.ModelOutputSanitizer
 import org.futo.inputmethod.latin.xlm.UserDictionaryObserver
 import org.futo.inputmethod.updates.openURI
+import org.futo.voiceinput.shared.BUILTIN_PARAKEET_MODEL
 import org.futo.voiceinput.shared.ModelDoesNotExistException
+import org.futo.voiceinput.shared.ggml.ParakeetModelDownloader
 import org.futo.voiceinput.shared.RecognizerView
 import org.futo.voiceinput.shared.RecognizerViewListener
 import org.futo.voiceinput.shared.RecognizerViewSettings
@@ -301,6 +303,52 @@ private class VoiceInputNoModelWindow(val locale: Locale) : ActionWindow() {
     }
 }
 
+/** KBP: shown when the built-in Parakeet model is selected but not on disk yet —
+ *  the downloader is running; show OUR progress instead of FUTO's model store. */
+private class CornerstoneModelDownloadWindow : ActionWindow() {
+    @Composable
+    override fun windowName(): String = "Cornerstone Voice"
+
+    @Composable
+    override fun WindowContents(keyboardShown: Boolean) {
+        val percent = ParakeetModelDownloader.progressPercent.intValue
+        val status = ParakeetModelDownloader.progressText.value
+        val error = ParakeetModelDownloader.lastError.value
+
+        Box(modifier = Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
+            androidx.compose.foundation.layout.Column(
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text("Cornerstone Voice", textAlign = TextAlign.Center)
+                Text(
+                    when {
+                        error != null -> "Download failed: $error\nClose and reopen voice input to retry."
+                        percent >= 100 -> "Voice model ready!\nClose and reopen voice input to start dictating."
+                        percent >= 0 -> "Downloading voice model… $percent%"
+                        else -> "Preparing voice model download…"
+                    },
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.padding(top = 12.dp)
+                )
+                if (error == null && percent in 0..99) {
+                    androidx.compose.material3.LinearProgressIndicator(
+                        progress = { percent / 100f },
+                        modifier = Modifier.padding(top = 12.dp)
+                    )
+                    if (status.isNotBlank()) {
+                        Text(status, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 8.dp))
+                    }
+                }
+                Text(
+                    "One-time download (~650MB). It resumes automatically if the connection drops — you can close this and keep typing.",
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.padding(top = 16.dp)
+                )
+            }
+        }
+    }
+}
+
 val VoiceInputAction = Action(icon = R.drawable.mic_fill,
     name = R.string.action_voice_input_title,
     simplePressImpl = null,
@@ -309,10 +357,14 @@ val VoiceInputAction = Action(icon = R.drawable.mic_fill,
     windowImpl = { manager, persistentState ->
         val locales = manager.getActiveLocales()
 
-        val model = ResourceHelper.tryFindingVoiceInputModelForLocale(manager.getContext(), locales.firstOrNull() ?: Locale.ROOT)
+        val model = ResourceHelper.tryFindingVoiceInputModelForLocale(manager.getContext(), locales.firstOrNull() ?: Locale.ROOT, triggerDownload = true)
 
         if(model == null) {
             VoiceInputNoModelWindow(locales.firstOrNull() ?: Locale.ROOT)
+        } else if (model === BUILTIN_PARAKEET_MODEL && !model.exists(manager.getContext())) {
+            // Our model isn't on disk yet — the downloader was already kicked off
+            // inside tryFindingVoiceInputModelForLocale; show OUR progress screen
+            CornerstoneModelDownloadWindow()
         } else {
             VoiceInputActionWindow(
                 manager = manager, state = persistentState as VoiceInputPersistentState,

@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Context.INPUT_METHOD_SERVICE
 import android.content.Intent
 import android.graphics.Color
+import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.view.inputmethod.InputMethodManager
@@ -216,6 +217,14 @@ class SettingsActivity : ComponentActivity(), DynamicThemeProviderOwner {
         super.onCreate(savedInstanceState)
 
         LayoutManager.init(this)
+
+        // KBP: voice model downloads report progress via notifications — ask once
+        if (Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) !=
+                android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) {
+            requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 42)
+        }
 
         enableEdgeToEdge()
 

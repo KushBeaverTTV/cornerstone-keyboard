@@ -10,6 +10,7 @@ import org.futo.inputmethod.latin.uix.theme.presets.AMOLEDDarkPurple
 import org.futo.inputmethod.latin.uix.theme.presets.CatppuccinMocha
 import org.futo.inputmethod.latin.uix.theme.presets.ClassicMaterialDark
 import org.futo.inputmethod.latin.uix.theme.presets.ClassicMaterialLight
+import org.futo.inputmethod.latin.uix.theme.presets.CornerstoneDark
 import org.futo.inputmethod.latin.uix.theme.presets.CottonCandy
 import org.futo.inputmethod.latin.uix.theme.presets.DeepSeaDark
 import org.futo.inputmethod.latin.uix.theme.presets.DeepSeaLight
@@ -37,6 +38,8 @@ data class ThemeOption(
 )
 
 val ThemeOptions = mapOf(
+    CornerstoneDark.key to CornerstoneDark,
+
     DefaultDarkScheme.key to DefaultDarkScheme,
     DefaultLightScheme.key to DefaultLightScheme,
 
@@ -71,16 +74,16 @@ fun defaultThemeOption(context: Context): ThemeOption =
     if(context.resources.getBoolean(R.bool.use_dev_styling)) {
         DevTheme
     } else {
-        if(DynamicSystemTheme.available(context)) {
-            DynamicSystemTheme
-        } else {
-            DefaultDarkScheme
-        }
+        CornerstoneDark
     }
 
 fun getThemeOption(context: Context, key: String): ThemeOption? {
-    return ThemeOptions[key] ?: run {
-        return ZipThemes.ThemeFileName.fromSetting(key)?.let { name ->
+    // KBP: unstable builds used to force DevTheme; if a previous install stored it,
+    // remap to the Cornerstone default instead of leaving the dev skin stuck on.
+    val effectiveKey = if (key == DevTheme.key &&
+        !context.resources.getBoolean(R.bool.use_dev_styling)) CornerstoneDark.key else key
+    return ThemeOptions[effectiveKey] ?: run {
+        return ZipThemes.ThemeFileName.fromSetting(effectiveKey)?.let { name ->
             ThemeOption(
                 dynamic = false,
                 key = key,

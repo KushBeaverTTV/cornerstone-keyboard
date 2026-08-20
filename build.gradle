@@ -243,6 +243,15 @@ android {
         project.logger.lifecycle('crashreporting.properties not found, crash reporting will be disabled')
     }
 
+    // KBP: inject the Agent Key token at build time from untracked local.properties.
+    // Never committed; empty default keeps public builds tokenless.
+    final def kbpLocalPropsFile = rootProject.file("local.properties")
+    final def kbpLocalProps = new Properties()
+    if (kbpLocalPropsFile.exists()) {
+        kbpLocalProps.load(new FileInputStream(kbpLocalPropsFile))
+    }
+    final def agentKeyToken = kbpLocalProps.getProperty("AGENT_KEY_TOKEN", "")
+
 
     buildTypes {
         debug {
@@ -272,6 +281,7 @@ android {
 
             //it.buildConfigField "String", "FUTOPAY_URL", "\"https://pay.futo.org/api/PaymentPortal?product=voiceinput&success=futo-keyboard%3a%2f%2flicense%2factivate\""
             it.buildConfigField "String", "FUTOPAY_URL", "\"https://pay2.futo.org/checkout/polar/futo-keyboard/futo-keyboard-voiceinput/checkout-ready?success=redirect-to-organization-page\""
+            it.buildConfigField "String", "AGENT_KEY_TOKEN", "\"${it.name == 'debug' ? agentKeyToken : ''}\""
             it.buildConfigField "String", "FUTOPAY_PRICE", "\"~\$6.99\""
 
             it.buildConfigField "String", "GOOGLEPAY_URL", "\"https://play.google.com/store/apps/details?id=org.futo.keyboardpayment\""
@@ -431,7 +441,7 @@ dependencies {
 
     implementation 'sh.calvin.reorderable:reorderable:3.0.0'
 
-    //implementation 'com.squareup.okhttp3:okhttp:4.11.0'
+    implementation 'com.squareup.okhttp3:okhttp:4.11.0'
     implementation 'org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.1'
     implementation 'org.jetbrains.kotlinx:kotlinx-serialization-json-jvm:1.7.1'
 

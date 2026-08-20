@@ -43,6 +43,9 @@
 
     <!-- Model name for the tiny model -->
     <string name="tiny_name">Multilingual-39 (less accurate)</string>
+
+    <!-- Model name for the built-in Parakeet TDT English model (sherpa-onnx) -->
+    <string name="parakeet_name">English Parakeet TDT 0.6B (default)</string>
     <!-- Model name for the base model -->
     <string name="base_name">Multilingual-74 (default)</string>
     <!-- Model name for the small model -->

@@ -26,6 +26,10 @@
     <uses-permission android:name="android.permission.WAKE_LOCK"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"/>
+    <!-- Agent Key prototype (P3): reaches the VPS endpoint over the Tailscale
+         mesh. FUTO deliberately ships without INTERNET; adding it here changes
+         the privacy posture, so the action only fires on explicit user tap. -->
+    <uses-permission android:name="android.permission.INTERNET"/>
 
     <!-- For clipboard manager reading screenshots -->
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
@@ -42,6 +46,7 @@
          android:allowBackup="true"
          android:largeHeap="true"
          android:enableOnBackInvokedCallback="true"
+         android:networkSecurityConfig="@xml/network_security_config"
          android:name=".CrashLoggingApplication">
 
         <!-- Services -->
