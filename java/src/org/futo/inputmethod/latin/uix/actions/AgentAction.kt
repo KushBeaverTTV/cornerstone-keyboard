@@ -135,6 +135,8 @@ val AgentAction = Action(
                 if (draft.isBlank()) {
                     simpleOkDialog(manager, "Type something first, then tap Agent.")
                 } else {
+                    // Immediate feedback — the call takes seconds; silence reads as broken
+                    showAnswerOnStrip(manager, "⏳ Asking the agent…")
                     manager.getLifecycleScope().launch(Dispatchers.IO) {
                         val answer = postToAgent(draft, token)
 
@@ -142,20 +144,18 @@ val AgentAction = Action(
                             if (answer == null) {
                                 simpleOkDialog(manager, "Agent request failed. Check connection and token.")
                             } else {
-                                val onStrip = showAnswerOnStrip(manager, answer)
-
-                                // Dialog fallback when the strip can't show it, and
-                                // always for long answers (Insert = type it in)
-                                if (!onStrip || answer.length > 60) {
-                                    manager.requestDialog(
-                                        answer,
-                                        listOf(
-                                            DialogRequestItem("Dismiss") {},
-                                            DialogRequestItem("Insert") { manager.typeText(answer) }
-                                        ),
-                                        {}
-                                    )
-                                }
+                                // The answer card is the primary UX — the strip is too
+                                // easy to miss (an answer there looks like a word
+                                // suggestion). Strip is a bonus, not the delivery.
+                                showAnswerOnStrip(manager, answer)
+                                manager.requestDialog(
+                                    answer,
+                                    listOf(
+                                        DialogRequestItem("Dismiss") {},
+                                        DialogRequestItem("Insert") { manager.typeText(answer) }
+                                    ),
+                                    {}
+                                )
                             }
                         }
                     }
