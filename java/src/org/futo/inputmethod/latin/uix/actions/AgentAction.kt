@@ -3,15 +3,11 @@ package org.futo.inputmethod.latin.uix.actions
 import android.text.InputType
 import android.util.Log
 import androidx.datastore.preferences.core.stringPreferencesKey
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
-import org.futo.inputmethod.latin.BuildConfig
 import org.futo.inputmethod.latin.R
 import org.futo.inputmethod.latin.SuggestedWords
 import org.futo.inputmethod.latin.SuggestedWords.SuggestedWordInfo
@@ -45,15 +41,17 @@ val AGENT_KEY_AGENT = SettingsKey(
 
 val AGENT_CHOICES = listOf("kimi" to "Kimi", "aurora" to "Aurora", "prima" to "Prima")
 
-private fun agentDisplayName(id: String): String =
+// Shared with AgentHub.kt (same package) — the hub reuses the display name,
+// HTTP client, password guard, and POST helper rather than duplicating them.
+internal fun agentDisplayName(id: String): String =
     AGENT_CHOICES.firstOrNull { it.first == id }?.second ?: "Kimi"
 
-private val agentHttpClient = OkHttpClient.Builder()
+internal val agentHttpClient = OkHttpClient.Builder()
     .connectTimeout(10, TimeUnit.SECONDS)
     .readTimeout(15, TimeUnit.SECONDS)
     .build()
 
-private fun isPasswordField(inputType: Int): Boolean {
+internal fun isPasswordField(inputType: Int): Boolean {
     val inputClass = inputType and InputType.TYPE_MASK_CLASS
     val variation = inputType and InputType.TYPE_MASK_VARIATION
     return (inputClass == InputType.TYPE_CLASS_TEXT &&
@@ -64,7 +62,8 @@ private fun isPasswordField(inputType: Int): Boolean {
                     variation == InputType.TYPE_NUMBER_VARIATION_PASSWORD)
 }
 
-private fun postToAgent(draft: String, token: String, agent: String): String? {
+// `draft` is the full text to send — callers compose any prompt into it first.
+internal fun postToAgent(draft: String, token: String, agent: String): String? {
     val body = JSONObject().put("text", draft).put("agent", agent).toString()
         .toRequestBody("application/json; charset=utf-8".toMediaType())
     val request = Request.Builder()
@@ -116,67 +115,12 @@ private fun showAnswerOnStrip(manager: KeyboardManagerForAction, answer: String)
     ime.showSuggestionStrip(words)
     return true
 }
-private fun simpleOkDialog(manager: KeyboardManagerForAction, text: String) {
-    manager.requestDialog(text, listOf(DialogRequestItem("OK") {}), {})
-}
 
 val AgentAction = Action(
     icon = R.drawable.agent,
     name = R.string.action_agent_title,
-    simplePressImpl = { manager, _ ->
-        val context = manager.getContext()
-        val token = context.getSetting(AGENT_KEY_TOKEN).ifBlank { BuildConfig.AGENT_KEY_TOKEN }
-        val agentId = context.getSetting(AGENT_KEY_AGENT)
-        val agentName = agentDisplayName(agentId)
-
-        when {
-            token.isBlank() -> simpleOkDialog(
-                manager,
-                "Agent Key token is not set. Configure the 'agent_key_token' setting to use the agent."
-            )
-
-            // Never read or send password field contents
-            manager.getLatinIMEForDebug().currentInputEditorInfo?.let {
-                isPasswordField(it.inputType)
-            } == true -> simpleOkDialog(manager, "Agent Key is disabled in password fields.")
-
-            else -> {
-                // Explicit tap only: capture the draft once, right here.
-                val transaction = manager.createInputTransaction()
-                val draft = transaction.textContext.beforeCursor?.toString().orEmpty()
-                transaction.cancel()
-
-                if (draft.isBlank()) {
-                    simpleOkDialog(manager, "Type something first, then tap Agent.")
-                } else {
-                    // Immediate feedback — the call takes seconds; silence reads as broken
-                    showAnswerOnStrip(manager, "⏳ Asking $agentName…")
-                    manager.getLifecycleScope().launch(Dispatchers.IO) {
-                        val answer = postToAgent(draft, token, agentId)
-
-                        withContext(Dispatchers.Main) {
-                            if (answer == null) {
-                                simpleOkDialog(manager, "$agentName request failed. Check connection and token.")
-                            } else {
-                                // The answer card is the primary UX — the strip is too
-                                // easy to miss (an answer there looks like a word
-                                // suggestion). Strip is a bonus, not the delivery.
-                                showAnswerOnStrip(manager, answer)
-                                manager.requestDialog(
-                                    "$agentName says:\n\n$answer",
-                                    listOf(
-                                        DialogRequestItem("Dismiss") {},
-                                        DialogRequestItem("Insert") { manager.typeText(answer) }
-                                    ),
-                                    {}
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    },
+    // Tap opens the Agent Hub window; the network call now happens from there.
+    simplePressImpl = null,
     // Long-press: pick which agent answers (Kimi / Aurora / Prima)
     altPressImpl = { manager, _ ->
         val context = manager.getContext()
@@ -192,5 +136,5 @@ val AgentAction = Action(
             {}
         )
     },
-    windowImpl = null,
+    windowImpl = { manager, _ -> AgentHubWindow(manager) },
 )
