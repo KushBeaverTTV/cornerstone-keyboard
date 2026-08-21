@@ -29,6 +29,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
@@ -238,7 +239,8 @@ private data class AgentRequest(
     val label: String,         // option label, or "Ask by voice" for dictation
     val promptPrefix: String,  // "" for dictation: the spoken text is the whole prompt
     val userText: String,      // captured draft, or the spoken question
-    val draftDeleteCount: Int  // code points to delete for Replace; 0 = no draft captured
+    val draftDeleteCount: Int, // code points to delete for Replace; 0 = no draft captured
+    val wholeField: Boolean = false // userText is the entire field, not just beforeCursor
 )
 
 /** One interaction option: label shown on the button, prompt prefix sent to the agent. */
@@ -269,6 +271,10 @@ internal class AgentHubWindow(
     private var statusFetchFailed by mutableStateOf(false)
     private var selectedAgent by mutableStateOf(context.getSetting(AGENT_KEY_AGENT))
     private var detailState by mutableStateOf<DetailState>(DetailState.Options)
+
+    // Whole-field mode: hub options send the entire field, not just the draft
+    // before the cursor (e.g. "summarize this email I'm reading").
+    private var wholeField by mutableStateOf(context.getSetting(AGENT_WHOLE_FIELD))
 
     // Wave 5 (Glamour): custom agents, one-time onboarding card, delete
     // confirmation, and the flashlight toggle's on/off state.
@@ -753,6 +759,27 @@ internal class AgentHubWindow(
         val tokenMissing = agentToken().isBlank()
 
         Column(modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Use whole field", style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        "Send the entire field, not just text before the cursor",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Switch(
+                    checked = wholeField,
+                    onCheckedChange = {
+                        wholeField = it
+                        context.setSettingBlocking(AGENT_WHOLE_FIELD.key, it)
+                    }
+                )
+            }
+
             // Voice first: the spoken text is sent as-is (no prefix, no draft needed).
             OutlinedButton(
                 onClick = { startDictation(agentId) },
@@ -1018,7 +1045,12 @@ internal class AgentHubWindow(
 
         // Read-only transaction: capture the draft, then cancel so nothing changes.
         val transaction = manager.createInputTransaction()
-        val draft = transaction.textContext.beforeCursor?.toString().orEmpty()
+        val beforeCursor = transaction.textContext.beforeCursor?.toString().orEmpty()
+        val draft = if (wholeField) {
+            beforeCursor + transaction.textContext.afterCursor?.toString().orEmpty()
+        } else {
+            beforeCursor
+        }
         transaction.cancel()
 
         if (draft.isBlank()) {
@@ -1030,13 +1062,17 @@ internal class AgentHubWindow(
         // per event, so count code points, not UTF-16 units (an emoji is two
         // units). Grapheme clusters (emoji + modifiers) can still drift by one
         // — acceptable approximation for the prototype.
+        // Whole-field captures get 0: Replace deletes backward only, so it
+        // can't undo text captured after the cursor — hiding the button (same
+        // mechanism as dictation) beats a half-correct replace.
         postPrompt(
             AgentRequest(
                 agentId = agentId,
-                label = option.label,
+                label = if (wholeField) "${option.label} (whole field)" else option.label,
                 promptPrefix = option.promptPrefix,
                 userText = draft,
-                draftDeleteCount = draft.codePointCount(0, draft.length)
+                draftDeleteCount = if (wholeField) 0 else draft.codePointCount(0, draft.length),
+                wholeField = wholeField
             )
         )
     }
@@ -1075,6 +1111,9 @@ internal class AgentHubWindow(
                     append("\n\n")
                 }
                 append(request.promptPrefix)
+                // Whole-field captures are labeled so the agent doesn't treat
+                // text after the cursor as part of an unfinished draft.
+                if (request.wholeField) append("[Full field contents, before and after the cursor]\n")
                 append(request.userText)
             }
             val endpoint = custom?.endpoint?.takeIf { it.isNotBlank() } ?: DEFAULT_AGENT_ENDPOINT

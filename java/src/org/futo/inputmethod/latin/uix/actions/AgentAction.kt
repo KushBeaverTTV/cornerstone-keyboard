@@ -2,6 +2,7 @@ package org.futo.inputmethod.latin.uix.actions
 
 import android.text.InputType
 import android.util.Log
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -38,6 +39,14 @@ val AGENT_KEY_TOKEN = SettingsKey(
 val AGENT_KEY_AGENT = SettingsKey(
     key = stringPreferencesKey("agent_key_agent"),
     default = "kimi"
+)
+
+// Whole-field mode: hub options act on the ENTIRE field (beforeCursor +
+// afterCursor) instead of only the text before the cursor. Toggle lives in
+// the hub's detail view.
+val AGENT_WHOLE_FIELD = SettingsKey(
+    key = booleanPreferencesKey("agent_key_whole_field"),
+    default = false
 )
 
 val AGENT_CHOICES = listOf("kimi" to "Kimi", "aurora" to "Aurora", "prima" to "Prima")

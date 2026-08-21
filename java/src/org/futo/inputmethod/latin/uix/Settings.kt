@@ -388,3 +388,10 @@ val SHOW_EMOJI_SUGGESTIONS = SettingsKey(
     key = booleanPreferencesKey("suggestEmojis"),
     default = true
 )
+
+// Text expansion pairs, stored as a JSON object mapping shortcut -> phrase.
+// Edited from the Text Expansion action window; consumed by TextExpander.
+val TEXT_EXPANSIONS = SettingsKey(
+    key = stringPreferencesKey("text_expansions"),
+    default = "{}"
+)

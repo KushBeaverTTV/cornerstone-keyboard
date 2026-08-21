@@ -54,6 +54,7 @@ import org.futo.inputmethod.latin.settings.SettingsValuesForSuggestion;
 import org.futo.inputmethod.latin.settings.SpacingAndPunctuations;
 import org.futo.inputmethod.latin.suggestions.SuggestionStripViewAccessor;
 import org.futo.inputmethod.latin.uix.actions.BugViewerKt;
+import org.futo.inputmethod.latin.uix.actions.TextExpander;
 import org.futo.inputmethod.latin.utils.InputTypeUtils;
 import org.futo.inputmethod.latin.utils.RecapitalizeStatus;
 import org.futo.inputmethod.latin.utils.StatsUtils;
@@ -1222,7 +1223,18 @@ public final class InputLogic {
         }
         // isComposingWord() may have changed since we stored wasComposing
         if (mWordComposer.isComposingWord()) {
-            if (settingsValues.mAutoCorrectionEnabledPerUserSettings
+            // Cornerstone text expansion: an exact shortcut match always wins
+            // over auto-correction — expansions are explicit user
+            // configuration, not a statistical guess. Space only, so a
+            // shortcut followed by punctuation keeps the literal shortcut.
+            final String expansion = Constants.CODE_SPACE == codePoint
+                    ? TextExpander.expand(mImeHelper.getContext(), mWordComposer.getTypedWord())
+                    : null;
+            if (expansion != null) {
+                commitChosenWord(settingsValues, expansion,
+                        LastComposedWord.COMMIT_TYPE_USER_TYPED_WORD,
+                        StringUtils.newSingleCodePointString(codePoint), -1);
+            } else if (settingsValues.mAutoCorrectionEnabledPerUserSettings
                     && Suggest.shouldCodePointAutocorrect(codePoint)) {
                 final String separator = shouldAvoidSendingCode ? LastComposedWord.NOT_A_SEPARATOR
                         : StringUtils.newSingleCodePointString(codePoint);
