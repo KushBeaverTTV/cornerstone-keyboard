@@ -1,10 +1,19 @@
 package org.futo.inputmethod.latin.uix.actions
 
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
@@ -22,10 +31,13 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -35,6 +47,24 @@ import androidx.compose.ui.unit.sp
 // than private so AgentHub.kt can use them; still module-local, not API.
 // Every color comes from MaterialTheme.colorScheme — the Cornerstone themes
 // already map the KBP house style (black canvas, amber primary, white text).
+
+/**
+ * Tactile press feedback: scales content to 0.97f while pressed. Applied by
+ * every interactive primitive so the whole hub responds uniformly to touch.
+ */
+@Composable
+internal fun Modifier.hubPressScale(interactionSource: MutableInteractionSource?): Modifier {
+    val pressed = interactionSource?.collectIsPressedAsState()?.value ?: false
+    val scale by animateFloatAsState(
+        targetValue = if (pressed) 0.97f else 1f,
+        animationSpec = tween(durationMillis = 120, easing = FastOutSlowInEasing),
+        label = "hubPressScale"
+    )
+    return this.graphicsLayer {
+        scaleX = scale
+        scaleY = scale
+    }
+}
 
 /**
  * The one card container: 16.dp rounded, surfaceContainerHighest fill,
@@ -54,15 +84,27 @@ internal fun HubCard(
     content: @Composable ColumnScope.() -> Unit
 ) {
     val shape = RoundedCornerShape(16.dp)
+    val cardInteraction = remember { MutableInteractionSource() }
     val clickModifier = when {
         onClick != null && onLongClick != null ->
-            Modifier.combinedClickable(onClick = onClick, onLongClick = onLongClick)
-        onClick != null -> Modifier.clickable(onClick = onClick)
+            Modifier.combinedClickable(
+                interactionSource = cardInteraction,
+                indication = null,
+                onClick = onClick,
+                onLongClick = onLongClick
+            )
+        onClick != null ->
+            Modifier.clickable(
+                interactionSource = cardInteraction,
+                indication = null,
+                onClick = onClick
+            )
         else -> Modifier
     }
     Box(
         modifier = modifier
             .fillMaxWidth()
+            .hubPressScale(if (onClick != null) cardInteraction else null)
             .clip(shape)
             .background(MaterialTheme.colorScheme.surfaceContainerHighest)
             .border(
@@ -148,12 +190,47 @@ internal fun HubStatusDot(online: Boolean?, unknown: Boolean, modifier: Modifier
         online == true -> MaterialTheme.colorScheme.primary
         else -> MaterialTheme.colorScheme.error
     }
-    Box(
-        modifier = modifier
-            .size(8.dp)
-            .clip(CircleShape)
-            .background(color)
-    )
+    Box(modifier = modifier) {
+        if (online == true && !unknown) {
+            // Soft pulsing ring behind the live dot — "online" breathes.
+            val transition = rememberInfiniteTransition(label = "hubLiveDot")
+            val ringScale by transition.animateFloat(
+                initialValue = 1f,
+                targetValue = 2.2f,
+                animationSpec = infiniteRepeatable(
+                    animation = tween(durationMillis = 1400, easing = FastOutSlowInEasing),
+                    repeatMode = RepeatMode.Restart
+                ),
+                label = "hubLiveRingScale"
+            )
+            val ringAlpha by transition.animateFloat(
+                initialValue = 0.45f,
+                targetValue = 0f,
+                animationSpec = infiniteRepeatable(
+                    animation = tween(durationMillis = 1400, easing = FastOutSlowInEasing),
+                    repeatMode = RepeatMode.Restart
+                ),
+                label = "hubLiveRingAlpha"
+            )
+            Box(
+                modifier = Modifier
+                    .size(8.dp)
+                    .graphicsLayer {
+                        scaleX = ringScale
+                        scaleY = ringScale
+                        this.alpha = ringAlpha
+                    }
+                    .clip(CircleShape)
+                    .background(color)
+            )
+        }
+        Box(
+            modifier = Modifier
+                .size(8.dp)
+                .clip(CircleShape)
+                .background(color)
+        )
+    }
 }
 
 /**
@@ -169,12 +246,14 @@ internal fun HubPrimaryPill(
     compact: Boolean = false
 ) {
     val shape = RoundedCornerShape(percent = 50)
+    val pillInteraction = remember { MutableInteractionSource() }
     Box(
         modifier = modifier
             .then(if (compact) Modifier else Modifier.fillMaxWidth())
             // 48dp minimum interactive target, compact included — matches the
             // accessibility floor Material buttons enforce.
             .height(if (compact) 48.dp else 52.dp)
+            .hubPressScale(pillInteraction)
             .clip(shape)
             .then(
                 if (!enabled) {
@@ -192,7 +271,7 @@ internal fun HubPrimaryPill(
                     MaterialTheme.colorScheme.surfaceContainerHighest
                 }
             )
-            .clickable(enabled = enabled, onClick = onClick)
+            .clickable(enabled = enabled, interactionSource = pillInteraction, indication = null, onClick = onClick)
             .padding(horizontal = 24.dp),
         contentAlignment = Alignment.Center
     ) {
@@ -209,21 +288,26 @@ internal fun HubPrimaryPill(
     }
 }
 
-/** Outlined pill for secondary actions: 1.dp outline, primary text, 13.sp. */
+/**
+ * Outlined pill for secondary actions: 1.dp outline, primary text, 13.sp.
+ * onClick is LAST so call sites can use trailing-lambda syntax.
+ */
 @Composable
 internal fun HubChip(
     text: String,
-    onClick: () -> Unit,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
-    textColor: Color? = null
+    textColor: Color? = null,
+    onClick: () -> Unit
 ) {
     val shape = RoundedCornerShape(percent = 50)
+    val chipInteraction = remember { MutableInteractionSource() }
     Box(
         modifier = modifier
             // 48dp minimum interactive target (was 36 — Material buttons
             // enforce 48 via minimumInteractiveComponentSize).
             .height(48.dp)
+            .hubPressScale(if (enabled) chipInteraction else null)
             .clip(shape)
             .border(
                 width = 1.dp,
@@ -234,7 +318,7 @@ internal fun HubChip(
                 },
                 shape = shape
             )
-            .clickable(enabled = enabled, onClick = onClick)
+            .clickable(enabled = enabled, interactionSource = chipInteraction, indication = null, onClick = onClick)
             .padding(horizontal = 16.dp),
         contentAlignment = Alignment.Center
     ) {
@@ -272,12 +356,19 @@ internal fun HubRowCard(rows: List<HubRow>, modifier: Modifier = Modifier) {
             .border(1.dp, MaterialTheme.colorScheme.outlineVariant, shape)
     ) {
         rows.forEachIndexed { index, row ->
+            val rowInteraction = remember { MutableInteractionSource() }
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier
                     .fillMaxWidth()
                     .heightIn(min = 48.dp)
-                    .clickable(enabled = row.enabled, onClick = row.onClick)
+                    .hubPressScale(if (row.enabled) rowInteraction else null)
+                    .clickable(
+                        enabled = row.enabled,
+                        interactionSource = rowInteraction,
+                        indication = null,
+                        onClick = row.onClick
+                    )
                     .padding(horizontal = 16.dp)
             ) {
                 Text(

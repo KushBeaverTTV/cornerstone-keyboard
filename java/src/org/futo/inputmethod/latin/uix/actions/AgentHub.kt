@@ -4,12 +4,20 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.util.Log
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -25,12 +33,15 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -75,6 +86,7 @@ import org.futo.inputmethod.latin.uix.USE_VAD_AUTOSTOP
 import org.futo.inputmethod.latin.uix.getSetting
 import org.futo.inputmethod.latin.uix.setSettingBlocking
 import org.futo.inputmethod.latin.uix.settings.SettingsActivity
+import android.view.KeyEvent
 import org.futo.voiceinput.shared.BUILTIN_PARAKEET_MODEL
 import org.futo.voiceinput.shared.ModelDoesNotExistException
 import org.futo.voiceinput.shared.RecognizerView
@@ -220,16 +232,16 @@ private sealed class HubScreen {
 
 /** State machine for the detail view's request lifecycle. */
 private sealed class DetailState {
+    /** The action rows / whole-field toggle (also the post-back-to state). */
     object Options : DetailState()
-    object Dictating : DetailState()
-    object Thinking : DetailState()
 
     /**
-     * An answer is showing. Keeps the originating request so the action row
-     * can Replace (delete-then-type needs the draft's delete count) and
-     * Regenerate (re-run needs the prompt parts) without re-deriving them.
+     * Conversation mode home: the persistent bubble thread plus the pinned
+     * follow-up row (text + send + voice). Every successful request lands here.
      */
-    data class Answered(val answer: String, val request: AgentRequest) : DetailState()
+    object Thread : DetailState()
+    object Dictating : DetailState()
+    object Thinking : DetailState()
     data class Failed(val message: String) : DetailState()
     data class Hint(val message: String) : DetailState()
 }
@@ -256,8 +268,74 @@ private val HUB_OPTIONS = listOf(
     HubOption("Improve my draft", "Improve this draft, keeping my voice and intent:\n\n"),
     HubOption("Rewrite — professional", "Rewrite this in a professional tone:\n\n"),
     HubOption("Rewrite — casual", "Rewrite this in a casual, friendly tone:\n\n"),
-    HubOption("Summarize this", "Summarize this briefly:\n\n")
+    HubOption("Summarize this", "Summarize this briefly:\n\n"),
+    HubOption("Draft a reply", "Draft a reply to this message in my voice, returning only the reply:\n\n"),
+    HubOption("Continue writing", "Continue this text seamlessly for 1-3 sentences, returning only the continuation:\n\n")
 )
+
+// "Translate…" opens an inline language input instead of firing immediately;
+// the composed prefix is built once the language is entered.
+internal const val TRANSLATE_LABEL = "Translate…"
+private fun translatePrefix(language: String) =
+    "Translate this to $language, returning only the translation:\n\n"
+
+/**
+ * One visible turn in an agent's conversation thread. Kept full-text so the
+ * follow-up prompt can carry real context (the summaries in AgentMemory are
+ * orientation only). role: true = user, false = agent.
+ */
+internal data class ThreadTurn(val fromUser: Boolean, val text: String, val label: String)
+
+/**
+ * Window-lifetime per-agent conversation threads. Back-navigation keeps the
+ * thread; process death clears it (acceptable for the prototype — user text
+ * never hits disk). Hard cap bounds prompt size.
+ */
+internal object ConversationThreads {
+    private const val MAX_TURNS = 40 // 20 exchanges
+    private val threads = mutableMapOf<String, ArrayDeque<ThreadTurn>>()
+
+    @Synchronized
+    fun add(agentId: String, turn: ThreadTurn) {
+        val queue = threads.getOrPut(agentId) { ArrayDeque() }
+        queue.addLast(turn)
+        while (queue.size > MAX_TURNS) queue.removeFirst()
+    }
+
+    @Synchronized
+    fun replaceLastAgentTurn(agentId: String, text: String): Boolean {
+        val queue = threads[agentId] ?: return false
+        for (index in queue.indices.reversed()) {
+            if (!queue[index].fromUser) {
+                queue[index] = queue[index].copy(text = text)
+                return true
+            }
+        }
+        return false
+    }
+
+    @Synchronized
+    fun turns(agentId: String): List<ThreadTurn> =
+        threads[agentId]?.toList() ?: emptyList()
+
+    /** Remove the newest turn (used when a request fails before answering). */
+    @Synchronized
+    fun dropLast(agentId: String) {
+        threads[agentId]?.removeLast()
+    }
+
+    /** Compact last-N transcript for the follow-up prompt. Null when empty. */
+    @Synchronized
+    fun contextBlock(agentId: String, maxTurns: Int = 8): String? {
+        val queue = threads[agentId]?.takeIf { it.isNotEmpty() } ?: return null
+        val recent = queue.takeLast(maxTurns)
+        val lines = recent.map { turn ->
+            val speaker = if (turn.fromUser) "User" else "You"
+            "$speaker: \"${turn.text.take(300)}\""
+        }
+        return "Conversation so far:\n" + lines.joinToString("\n")
+    }
+}
 
 /**
  * The Agent Hub window: a tile per agent, and a detail view per agent with
@@ -287,6 +365,18 @@ internal class AgentHubWindow(
     private var hubOnboarded by mutableStateOf(context.getSetting(HUB_ONBOARDED))
     private var pendingDeleteAgent by mutableStateOf<CustomAgent?>(null)
     private var torchOn by mutableStateOf(false)
+
+    // v2 conversation mode: bump to recompose the thread; lastAnswerRequest keeps
+    // the most recent request for Replace/Regenerate in the Thread view.
+    private var threadVersion by mutableStateOf(0)
+    private var lastAnswerRequest by mutableStateOf<AgentRequest?>(null)
+
+    // Translate… inline language input state (detail-view local).
+    private var translateLanguage by mutableStateOf("")
+
+    // Follow-up input text + focus owner flag ("text" | "translate" | null).
+    private var followUpText by mutableStateOf("")
+    private var translateText by mutableStateOf("")
 
     // ---- Dictation (Ask by voice) session state ----
     // Window-scoped, not remember{} state: the RecognizerViewListener callbacks
@@ -334,20 +424,36 @@ internal class AgentHubWindow(
         }
 
         Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
-            when (val current = screen) {
-                HubScreen.Tiles -> HubTiles(
-                    onSelect = { id ->
-                        // Tapping a tile both picks the agent (persisted, so the
-                        // quick-switcher and old flows agree) and opens its detail view.
-                        context.setSettingBlocking(AGENT_KEY_AGENT.key, id)
-                        selectedAgent = id
-                        detailState = DetailState.Options
-                        screen = HubScreen.Detail(id)
-                    }
-                )
+            AnimatedContent(
+                targetState = screen,
+                transitionSpec = {
+                    // Subtle forward slide-up + fade; the reverse plays on back.
+                    (slideInVertically(
+                        animationSpec = tween(250, easing = FastOutSlowInEasing),
+                        initialOffsetY = { it / 8 }
+                    ) + fadeIn(tween(250))) togetherWith
+                        (slideOutVertically(
+                            animationSpec = tween(200, easing = FastOutSlowInEasing),
+                            targetOffsetY = { -it / 10 }
+                        ) + fadeOut(tween(200)))
+                },
+                label = "hubScreenTransition"
+            ) { current ->
+                when (current) {
+                    HubScreen.Tiles -> HubTiles(
+                        onSelect = { id ->
+                            // Tapping a tile both picks the agent (persisted, so the
+                            // quick-switcher and old flows agree) and opens its detail view.
+                            context.setSettingBlocking(AGENT_KEY_AGENT.key, id)
+                            selectedAgent = id
+                            detailState = DetailState.Options
+                            screen = HubScreen.Detail(id)
+                        }
+                    )
 
-                is HubScreen.Detail -> AgentDetail(current.agentId)
-                HubScreen.AddAgent -> AddAgentForm()
+                    is HubScreen.Detail -> AgentDetail(current.agentId)
+                    HubScreen.AddAgent -> AddAgentForm()
+                }
             }
         }
     }
@@ -691,13 +797,37 @@ internal class AgentHubWindow(
 
     // ---- Detail view ----
 
-    // ColumnScope extension so the Answered branch can weight() its scroll box.
     @Composable
     private fun ColumnScope.AgentDetail(agentId: String) {
         val name = agentName(agentId)
         val status = statuses?.get(agentId)
         val custom = customAgent(agentId)
 
+        // Single-root wrapper: AnimatedContent places targets in a Box, and this
+        // function emits TWO siblings (header + state content) — in a Box they
+        // stack on the same origin, which buried the header under the options
+        // list (seen on the emulator rig 2026-08-21). The Column restores
+        // vertical order. Tiles/AddAgent emit one root each and are unaffected.
+        Column(modifier = Modifier.fillMaxWidth()) {
+            DetailHeader(name, status, agentId, custom != null)
+            when (val state = detailState) {
+                DetailState.Options -> DetailOptions(agentId)
+                is DetailState.Thread -> ThreadView(agentId)
+                DetailState.Dictating -> DictationPanel(agentId)
+                DetailState.Thinking -> ThinkingView(name)
+                is DetailState.Failed -> MessageWithBack(state.message, isError = true)
+                is DetailState.Hint -> MessageWithBack(state.message, isError = false)
+            }
+        }
+    }
+
+    @Composable
+    private fun DetailHeader(
+        name: String,
+        status: AgentStatus?,
+        agentId: String,
+        isCustom: Boolean
+    ) {
         // App-bar row: back chevron (48.dp touch target) + monogram + name with
         // an inline status dot and subtitle. Back behavior is identical to the
         // old "← Back" button: teardown dictation, reset state, go to Tiles.
@@ -737,7 +867,7 @@ internal class AgentHubWindow(
                     // Custom agents aren't on the hub roster — neutral dot, not a guess.
                     StatusDot(
                         online = status?.online,
-                        unknown = statusFetchFailed || custom != null && status == null
+                        unknown = statusFetchFailed || isCustom && status == null
                     )
                     Spacer(modifier = Modifier.width(6.dp))
                     // AgentMemory is not Compose state, but every record() is immediately
@@ -757,18 +887,9 @@ internal class AgentHubWindow(
                 }
             }
         }
-
-        when (val state = detailState) {
-            DetailState.Options -> DetailOptions(agentId)
-            DetailState.Dictating -> DictationPanel(agentId)
-            DetailState.Thinking -> ThinkingView(name)
-            is DetailState.Answered -> AnswerView(state)
-            is DetailState.Failed -> MessageWithBack(state.message, isError = true)
-            is DetailState.Hint -> MessageWithBack(state.message, isError = false)
-        }
     }
 
-    /** Pulsing monogram + amber progress while a request is in flight. */
+    /** Pulsing monogram + typing dots + amber progress while a request is in flight. */
     @Composable
     private fun ThinkingView(name: String) {
         val transition = rememberInfiniteTransition(label = "hubThinking")
@@ -781,17 +902,42 @@ internal class AgentHubWindow(
             ),
             label = "hubThinkingAlpha"
         )
+        // Three-dot typing indicator, staggered by phase offsets.
+        val dotsTransition = rememberInfiniteTransition(label = "hubDots")
+        val dotPhase = listOf(0, 200, 400)
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
             modifier = Modifier.fillMaxWidth().padding(vertical = 24.dp)
         ) {
             HubMonogram(name = name, active = true, modifier = Modifier.alpha(pulse))
             Spacer(modifier = Modifier.height(12.dp))
-            Text(
-                "$name is thinking",
-                fontSize = 15.sp,
-                color = MaterialTheme.colorScheme.onSurface
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "$name is thinking",
+                    fontSize = 15.sp,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                dotPhase.forEach { delayMs ->
+                    val dotAlpha by dotsTransition.animateFloat(
+                        initialValue = 0.2f,
+                        targetValue = 1f,
+                        animationSpec = infiniteRepeatable(
+                            animation = tween(durationMillis = 600, delayMillis = delayMs, easing = FastOutSlowInEasing),
+                            repeatMode = RepeatMode.Reverse
+                        ),
+                        label = "hubDot$delayMs"
+                    )
+                    Box(
+                        modifier = Modifier
+                            .padding(horizontal = 2.dp)
+                            .size(5.dp)
+                            .alpha(dotAlpha)
+                            .clip(CircleShape)
+                            .background(MaterialTheme.colorScheme.primary)
+                    )
+                }
+            }
             Spacer(modifier = Modifier.height(12.dp))
             LinearProgressIndicator(
                 color = MaterialTheme.colorScheme.primary,
@@ -900,124 +1046,359 @@ internal class AgentHubWindow(
     }
 
     /**
-     * On-device helpers for the hub. Only what's cleanly possible from an IME
-     * without new permissions is wired; anything not wired says so instead of
-     * pretending (see HubDeviceActions.kt for the per-action honesty rules).
+     * Real device control (v2): sound/media via AudioManager, brightness via
+     * Settings.System (one-time WRITE_SETTINGS grant walked through on first
+     * use), vibrate, flashlight with true state tracking, alarm. No Wi-Fi row:
+     * silent third-party toggles have been impossible since Android 10.
      */
     @Composable
     private fun DeviceActionsSection(agentId: String) {
-        val scope = rememberCoroutineScope()
         val lastAnswer = AgentMemory.lastAnswer(agentId)
 
         Spacer(modifier = Modifier.height(20.dp))
-        HubSectionLabel("DEVICE ACTIONS")
+        HubSectionLabel("DEVICE CONTROL")
         Text(
-            "Helpers that run on this phone. No new permissions.",
+            "Real controls for this phone. Brightness asks for a one-time settings grant.",
             fontSize = 13.sp,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(top = 4.dp, bottom = 10.dp)
         )
 
+        HubSectionLabel("SOUND & MEDIA")
+        Spacer(modifier = Modifier.height(6.dp))
         HubRowCard(
             rows = listOf(
-                HubRow("Set alarm") {
-                    if (!openAlarmSetter(context)) manager.announce("No clock app on this device")
+                HubRow("Volume up") { deviceVolume(context, raise = true) },
+                HubRow("Volume down") { deviceVolume(context, raise = false) },
+                HubRow("Mute / unmute media") { deviceMuteToggle(context) },
+                HubRow("Play / pause") { deviceMediaKey(context, KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE) },
+                HubRow("Next track") { deviceMediaKey(context, KeyEvent.KEYCODE_MEDIA_NEXT) },
+                HubRow("Previous track") { deviceMediaKey(context, KeyEvent.KEYCODE_MEDIA_PREVIOUS) }
+            )
+        )
+
+        Spacer(modifier = Modifier.height(12.dp))
+        HubSectionLabel("DEVICE")
+        Spacer(modifier = Modifier.height(6.dp))
+        HubRowCard(
+            rows = listOf(
+                HubRow("Brightness up") {
+                    val result = adjustBrightness(context, +30)
+                    manager.announce(
+                        when (result) {
+                            is BrightnessResult.Set -> "Brightness ${result.level}"
+                            BrightnessResult.NeedsGrant -> "Grant modify-settings once, then it works"
+                            BrightnessResult.Unavailable -> "Brightness unavailable on this device"
+                        }
+                    )
                 },
+                HubRow("Brightness down") {
+                    val result = adjustBrightness(context, -30)
+                    manager.announce(
+                        when (result) {
+                            is BrightnessResult.Set -> "Brightness ${result.level}"
+                            BrightnessResult.NeedsGrant -> "Opening modify-settings grant"
+                            BrightnessResult.Unavailable -> "Brightness unavailable on this device"
+                        }
+                    )
+                },
+                HubRow("Vibrate") { deviceVibrate(context) },
                 HubRow(if (torchOn) "Flashlight (on)" else "Flashlight") {
                     if (setTorch(context, !torchOn)) {
                         torchOn = !torchOn
                         manager.announce(if (torchOn) "Flashlight on" else "Flashlight off")
                     } else {
-                        manager.announce("Flashlight unavailable on this device")
+                        manager.announce("Flashlight unavailable or camera busy")
                     }
                 },
-                HubRow("Copy last answer", enabled = lastAnswer != null) {
-                    lastAnswer?.let { copyAnswer(it) }
-                },
-                // Stub: the hub has no find-my-phone endpoint today, so a failure is
-                // reported as "not wired yet", never as success.
-                HubRow("Find my phone (not wired yet)") {
-                    scope.launch(Dispatchers.IO) {
-                        val wired = requestFindMyPhone(agentToken())
-                        withContext(Dispatchers.Main) {
-                            if (wired) {
-                                manager.announce("Find-my-phone request sent")
+                HubRow("Set alarm") {
+                    if (!openAlarmSetter(context)) manager.announce("No clock app on this device")
+                }
+            )
+        )
+
+        // Copy-last-answer stays under the agent, not the device.
+        val copyEnabled = lastAnswer != null
+        if (copyEnabled) {
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(modifier = Modifier.fillMaxWidth()) {
+                HubChip(text = "Copy last answer") { lastAnswer?.let { copyAnswer(it) } }
+            }
+        }
+    }
+
+    // ---- Conversation mode: persistent bubble thread + follow-up row ----
+
+    @Composable
+    private fun ThreadView(agentId: String) {
+        val passwordGuard = isPasswordContext
+        val tokenMissing = agentToken().isBlank()
+        val canAct = !passwordGuard && !tokenMissing
+
+        // Reading ConversationThreads through threadVersion makes every add/replace
+        // in postPrompt recompose this view.
+        val turns = remember(threadVersion, agentId) { ConversationThreads.turns(agentId) }
+        val lastRequest = lastAnswerRequest
+
+        Column(modifier = Modifier.fillMaxWidth()) {
+            HubRowCard(
+                rows = listOf(
+                    HubRow("Actions & drafts", enabled = true) { detailState = DetailState.Options }
+                )
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+
+            if (turns.isEmpty()) {
+                HubCard(accentColor = MaterialTheme.colorScheme.primary) {
+                    Text(
+                        "Start the conversation — run an action, ask by voice, or type a follow-up below. " +
+                            "The thread stays with ${agentName(agentId)} while the keyboard is open.",
+                        fontSize = 14.sp,
+                        lineHeight = 20.sp,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                }
+            } else {
+                // Bounded scroll box — weight() collapses under wrap measurement.
+                Box(
+                    modifier = Modifier
+                        .heightIn(min = 160.dp, max = 300.dp)
+                        .fillMaxWidth()
+                        .verticalScroll(rememberScrollState())
+                ) {
+                    Column(
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
+                    ) {
+                        turns.forEach { turn ->
+                            if (turn.fromUser) {
+                                UserBubble(turn)
                             } else {
-                                detailState = DetailState.Hint(
-                                    "Find my phone isn't wired yet — the hub has no endpoint for it."
-                                )
+                                AgentBubble(agentId, turn)
                             }
                         }
                     }
                 }
-            )
-        )
-        if (lastAnswer == null) {
+            }
+
+            // Pinned follow-up row: never scrolls away.
+            Spacer(modifier = Modifier.height(12.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                TextField(
+                    value = followUpText,
+                    onValueChange = { followUpText = it },
+                    placeholder = { Text("Ask a follow-up…") },
+                    singleLine = true,
+                    enabled = canAct,
+                    modifier = Modifier.weight(1f)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Box(
+                    modifier = Modifier
+                        .size(48.dp)
+                        .clip(CircleShape)
+                        .background(if (canAct) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceContainerHighest)
+                        .clickable(enabled = canAct) { sendFollowUp(agentId) },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text("↑", color = MaterialTheme.colorScheme.onPrimary, fontSize = 20.sp)
+                }
+            }
+            Row(
+                horizontalArrangement = Arrangement.End,
+                modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
+            ) {
+                HubChip(text = "Voice", onClick = { startDictation(agentId) }, enabled = canAct)
+            }
+
+            // Last-answer actions operate on the most recent agent turn only.
+            val lastAgentText = turns.lastOrNull { !it.fromUser }?.text
+            if (lastAgentText != null) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState())
+                        .padding(top = 8.dp)
+                ) {
+                    if ((lastRequest?.draftDeleteCount ?: 0) > 0) {
+                        HubChip(text = "Replace draft") {
+                            replaceDraftWith(lastAgentText, lastRequest!!.draftDeleteCount)
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                    }
+                    HubChip(text = "Insert") { insertAnswer(lastAgentText) }
+                    Spacer(modifier = Modifier.width(8.dp))
+                    HubChip(text = "Copy") { copyAnswer(lastAgentText) }
+                    Spacer(modifier = Modifier.width(8.dp))
+                    HubChip(text = "Regenerate", enabled = canAct) { regenerateLast(lastRequest) }
+                }
+            }
+
+            if (passwordGuard) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    "${agentName(agentId)} is disabled in password fields.",
+                    fontSize = 13.sp,
+                    color = MaterialTheme.colorScheme.error
+                )
+            } else if (tokenMissing) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    "Agent token is not set. Configure the 'agent_key_token' setting to use the agent.",
+                    fontSize = 13.sp,
+                    color = MaterialTheme.colorScheme.error
+                )
+            }
+
+            TranslateCard(agentId, canAct)
+        }
+    }
+
+    @Composable
+    private fun UserBubble(turn: ThreadTurn) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.End
+        ) {
+            Surface(
+                color = MaterialTheme.colorScheme.primaryContainer,
+                contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp, bottomStart = 16.dp, bottomEnd = 4.dp),
+                modifier = Modifier.widthIn(max = 280.dp)
+            ) {
+                Text(
+                    turn.text,
+                    fontSize = 14.sp,
+                    lineHeight = 20.sp,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                )
+            }
+        }
+        if (turn.label.isNotBlank()) {
             Text(
-                "Nothing to copy yet — ask ${agentName(agentId)} something first.",
-                fontSize = 13.sp,
+                turn.label,
+                fontSize = 11.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(top = 8.dp)
+                textAlign = TextAlign.End,
+                modifier = Modifier.fillMaxWidth().padding(top = 2.dp)
             )
         }
     }
 
     @Composable
-    private fun ColumnScope.AnswerView(state: DetailState.Answered) {
-        HubSectionLabel(
-            agentName(state.request.agentId),
-            modifier = Modifier.padding(bottom = 8.dp)
-        )
-        HubCard {
-            // Bounded height, NOT weight(1f): the IME action window can measure this
-            // Column as wrap-content, in which case a weighted box collapses to zero
-            // height and the answer renders invisibly (confirmed on emulator 2026-08-21).
-            // 320dp fits ~8 lines and scrolls for longer answers.
-            Box(
-                modifier = Modifier
-                    .heightIn(min = 120.dp, max = 320.dp)
-                    .fillMaxWidth()
-                    .verticalScroll(rememberScrollState())
+    private fun AgentBubble(agentId: String, turn: ThreadTurn) {
+        Row(verticalAlignment = Alignment.Top) {
+            HubMonogram(name = agentName(agentId), active = true, size = 28.dp)
+            Spacer(modifier = Modifier.width(8.dp))
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceContainerHighest,
+                contentColor = MaterialTheme.colorScheme.onSurface,
+                shape = RoundedCornerShape(topStart = 4.dp, topEnd = 16.dp, bottomStart = 16.dp, bottomEnd = 16.dp),
+                modifier = Modifier.widthIn(max = 280.dp)
             ) {
-                // Explicit onSurface: the IME window's default content color is not
-                // guaranteed light on every theme path, and an invisible answer
-                // renders as a dead black gap (seen on emulator 2026-08-21).
                 Text(
-                    state.answer,
-                    fontSize = 15.sp,
-                    lineHeight = 22.sp,
-                    color = MaterialTheme.colorScheme.onSurface
+                    turn.text,
+                    fontSize = 14.sp,
+                    lineHeight = 20.sp,
+                    // Explicit onSurface: default content color is not guaranteed
+                    // light on every theme path (invisible-text bug).
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
                 )
             }
         }
-        // Primary action pinned OUTSIDE the scroll row: Insert must never be
-        // hidden off-screen. Secondary actions scroll horizontally.
-        Row(modifier = Modifier.fillMaxWidth().padding(top = 12.dp)) {
-            HubChip(text = "Back", onClick = { detailState = DetailState.Options })
-            Spacer(modifier = Modifier.weight(1f))
-            HubPrimaryPill(
-                text = "Insert",
-                onClick = { insertAnswer(state.answer) },
-                compact = true
-            )
-        }
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState())
-                .padding(top = 8.dp)
-        ) {
-            // Replace only exists when a draft was captured — dictation answers
-            // have nothing before the cursor to swap out.
-            if (state.request.draftDeleteCount > 0) {
-                HubChip(text = "Replace draft", onClick = { replaceDraftWith(state) })
+    }
+
+    /** Inline language input for Translate…; Go fires as soon as a language is set. */
+    @Composable
+    private fun TranslateCard(agentId: String, canAct: Boolean) {
+        Spacer(modifier = Modifier.height(16.dp))
+        HubSectionLabel("TRANSLATE")
+        Spacer(modifier = Modifier.height(6.dp))
+        HubCard {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                TextField(
+                    value = translateText,
+                    onValueChange = { translateText = it },
+                    placeholder = { Text("e.g. Spanish") },
+                    singleLine = true,
+                    enabled = canAct,
+                    modifier = Modifier.weight(1f)
+                )
                 Spacer(modifier = Modifier.width(8.dp))
+                HubChip(
+                    text = "Go",
+                    enabled = canAct && translateText.isNotBlank(),
+                    onClick = {
+                        val language = translateText.trim()
+                        if (language.isNotEmpty()) runTranslate(agentId, language)
+                    }
+                )
             }
-            HubChip(text = "Copy", onClick = { copyAnswer(state.answer) })
-            Spacer(modifier = Modifier.width(8.dp))
-            HubChip(text = "Regenerate", onClick = { postPrompt(state.request) })
+            if (!canAct) {
+                Text(
+                    "Translation is disabled here (password field or missing token).",
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 6.dp)
+                )
+            }
         }
     }
+
+    // ---- Thread actions ----
+
+    private fun sendFollowUp(agentId: String) {
+        val text = followUpText.trim()
+        if (text.isEmpty()) return
+        followUpText = ""
+        // The spoken/typed question IS the prompt — same contract as Ask by voice.
+        postPrompt(
+            AgentRequest(
+                agentId = agentId,
+                label = "Follow-up",
+                promptPrefix = "",
+                userText = text,
+                draftDeleteCount = 0
+            )
+        )
+    }
+
+    private fun regenerateLast(lastRequest: AgentRequest?) {
+        if (lastRequest != null) postPrompt(lastRequest, recordUser = false)
+    }
+
+    private fun runTranslate(agentId: String, language: String) {
+        translateText = ""
+        // Belt-and-braces guard mirroring runOption.
+        if (isPasswordContext) return
+        val transaction = manager.createInputTransaction()
+        val beforeCursor = transaction.textContext.beforeCursor?.toString().orEmpty()
+        val draft = if (wholeField) {
+            beforeCursor + transaction.textContext.afterCursor?.toString().orEmpty()
+        } else {
+            beforeCursor
+        }
+        transaction.cancel()
+
+        if (draft.isBlank()) {
+            detailState = DetailState.Hint("Type something in the field first")
+            return
+        }
+
+        postPrompt(
+            AgentRequest(
+                agentId = agentId,
+                label = "$TRANSLATE_LABEL ($language)",
+                promptPrefix = translatePrefix(language),
+                userText = draft,
+                draftDeleteCount = if (wholeField) 0 else draft.codePointCount(0, draft.length),
+                wholeField = wholeField
+            )
+        )
+    }
+
 
     // In-window dictation panel: embeds the shared RecognizerView. Cancel is an
     // UNWEIGHTED sibling below the weighted card: when the IME window
@@ -1156,13 +1537,16 @@ internal class AgentHubWindow(
     }
 
     /**
-     * Shared tail of every prompt path (button options, voice dictation, and
-     * Regenerate): Thinking on the Main dispatcher, POST off it, result back
-     * on Main. Recent exchanges are prepended here — once per send — so a
-     * re-run sees the conversation it is continuing, and only successful
-     * answers become memory (failures carry nothing a follow-up could use).
+     * Shared tail of every prompt path (button options, voice dictation,
+     * follow-ups, and Regenerate): Thinking on the Main dispatcher, POST off
+     * it, result back on Main. The conversation thread gets the user turn up
+     * front — so a slow answer never loses what was asked — and the agent's
+     * turn only on success (a failed request leaves nothing behind). AgentMemory
+     * records successful answers exactly as before. Regenerate passes
+     * recordUser=false: its user turn is already in the thread, and the new
+     * answer REPLACES the old agent bubble instead of duplicating the pair.
      */
-    private fun postPrompt(request: AgentRequest) {
+    private fun postPrompt(request: AgentRequest, recordUser: Boolean = true) {
         val name = agentName(request.agentId)
 
         val token = agentToken()
@@ -1171,13 +1555,22 @@ internal class AgentHubWindow(
             return
         }
 
+        if (recordUser) {
+            ConversationThreads.add(
+                request.agentId,
+                ThreadTurn(fromUser = true, text = request.userText, label = request.label)
+            )
+            threadVersion++
+        }
+
         detailState = DetailState.Thinking
         manager.getLifecycleScope().launch(Dispatchers.IO) {
             // The composed prompt IS the text — postToAgent takes the full string.
             // A custom agent's system prompt goes first (it's the standing
-            // instruction), then memory so the agent sees its own prior answers
-            // before the new request.
+            // instruction), then the live thread so follow-ups continue the real
+            // conversation, then AgentMemory for older summary context.
             val custom = customAgent(request.agentId)
+            val threadContext = ConversationThreads.contextBlock(request.agentId)
             val memoryContext = AgentMemory.contextBlock(request.agentId)
             val prompt = buildString {
                 if (custom != null && custom.systemPrompt.isNotBlank()) {
@@ -1187,6 +1580,10 @@ internal class AgentHubWindow(
                 if (memoryContext != null) {
                     append(memoryContext)
                     append("\n\n")
+                }
+                if (threadContext != null) {
+                    append(threadContext)
+                    append("\n\nRespond to the latest request.\n\n")
                 }
                 append(request.promptPrefix)
                 // Whole-field captures are labeled so the agent doesn't treat
@@ -1198,11 +1595,25 @@ internal class AgentHubWindow(
             val answer = postToAgent(prompt, token, request.agentId, endpoint)
             Log.i("AgentHub", "answer from ${request.agentId}: len=${answer?.length} head=${answer?.take(60)}")
             withContext(Dispatchers.Main) {
-                detailState = if (answer != null) {
+                if (answer != null) {
                     AgentMemory.record(request.agentId, request.label, request.userText, answer)
-                    DetailState.Answered(answer, request)
+                    if (recordUser.not()) {
+                        // Regenerate: swap the previous agent bubble for the new answer.
+                        ConversationThreads.replaceLastAgentTurn(request.agentId, answer)
+                    } else {
+                        ConversationThreads.add(
+                            request.agentId,
+                            ThreadTurn(fromUser = false, text = answer, label = request.label)
+                        )
+                    }
+                    threadVersion++
+                    lastAnswerRequest = request
+                    detailState = DetailState.Thread
                 } else {
-                    DetailState.Failed("$name request failed. Check connection and token.")
+                    // The pending user turn would dangle with no reply — pull it back out.
+                    if (recordUser) ConversationThreads.dropLast(request.agentId)
+                    threadVersion++
+                    detailState = DetailState.Failed("$name request failed. Check connection and token.")
                 }
             }
         }
@@ -1224,9 +1635,9 @@ internal class AgentHubWindow(
      * started, backspace removes whatever is before the cursor now. The hub
      * window keeps the keyboard open, so mid-request edits are unlikely.
      */
-    private fun replaceDraftWith(state: DetailState.Answered) {
-        manager.backspace(state.request.draftDeleteCount)
-        manager.typeText(state.answer)
+    private fun replaceDraftWith(answer: String, draftDeleteCount: Int) {
+        manager.backspace(draftDeleteCount)
+        manager.typeText(answer)
         manager.closeActionWindow()
     }
 

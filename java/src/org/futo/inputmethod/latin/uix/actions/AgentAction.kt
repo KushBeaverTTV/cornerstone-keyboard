@@ -56,9 +56,13 @@ val AGENT_CHOICES = listOf("kimi" to "Kimi", "aurora" to "Aurora", "prima" to "P
 internal fun agentDisplayName(id: String): String =
     AGENT_CHOICES.firstOrNull { it.first == id }?.second ?: "Kimi"
 
+// Read timeout must exceed the hub's PC-bridge budget (BRIDGE_TIMEOUT=175s):
+// Aurora/Prima answers spawn a model process on kbp-hq and can legitimately
+// take ~3 minutes. 15s killed every bridge-agent request client-side while the
+// server was still working (seen on the emulator rig 2026-08-21).
 internal val agentHttpClient = OkHttpClient.Builder()
     .connectTimeout(10, TimeUnit.SECONDS)
-    .readTimeout(15, TimeUnit.SECONDS)
+    .readTimeout(200, TimeUnit.SECONDS)
     .build()
 
 internal fun isPasswordField(inputType: Int): Boolean {
