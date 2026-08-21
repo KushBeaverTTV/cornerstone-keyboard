@@ -319,6 +319,7 @@ class SwipeDecoderDictionary(val context: Context, val locale: Locale) : Diction
     }
 
     var decoder: SwipeDecoder? = null
+    private var decoderBroken = false
 
     object BeamValues {
         const val shortBeam = 32
@@ -327,19 +328,30 @@ class SwipeDecoderDictionary(val context: Context, val locale: Locale) : Diction
         const val highestBeam = 300
     }
 
-    private fun getOrInitDecoder(): SwipeDecoder = decoder ?: run {
+    private fun getOrInitDecoder(): SwipeDecoder {
+        decoder?.let { return it }
+        if (decoderBroken) throw IllegalStateException("swipe decoder disabled after init failure")
+
         val swipeModelPath = getFilePath(context, SWIPE_MODEL)
 
-        val decoder = SwipeDecoder(
-            encoderPath = swipeModelPath,
-            beamWidth = BeamValues.highestBeam,
-            useExpansion = false, // ITrie contains expanded entries already
-        )
-
-        this.decoder = decoder
-        applyPendingLayoutInfo()
-
-        return decoder
+        try {
+            val newDecoder = SwipeDecoder(
+                encoderPath = swipeModelPath,
+                beamWidth = BeamValues.highestBeam,
+                useExpansion = false, // ITrie contains expanded entries already
+            )
+            this.decoder = newDecoder
+            applyPendingLayoutInfo()
+            return newDecoder
+        } catch (e: Exception) {
+            // A corrupt/stale .pte in code_cache used to crash-loop the whole keyboard.
+            // Delete the cached model so the next process start re-extracts from assets,
+            // and disable swipe for this session instead of throwing again.
+            Log.e("SwipeDecoderDictionary", "decoder init failed; disabling swipe", e)
+            java.io.File(context.codeCacheDir, SWIPE_MODEL).delete()
+            decoderBroken = true
+            throw IllegalStateException("swipe decoder unavailable", e)
+        }
     }
 
     override fun getNextValidCodePoints(composedData: ComposedData?): ArrayList<Int> {
@@ -446,7 +458,13 @@ class SwipeDecoderDictionary(val context: Context, val locale: Locale) : Diction
             ?.takeLast(10)
             ?: emptyList()
 
-        val decoder = getOrInitDecoder()
+        val decoder = try {
+            getOrInitDecoder()
+        } catch (e: IllegalStateException) {
+            // Swipe disabled after model init failure — no gesture suggestions this
+            // session, but typing must keep working.
+            return null
+        }
         decoder.setContext(wordsContext)
         appliedTrieWeights = trieWeights
 
