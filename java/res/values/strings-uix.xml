@@ -45,7 +45,7 @@
     <string name="action_emoji_search_for_emojis">Search</string>
 
     <!-- For voice input action -->
-    <string name="action_voice_input_title">Voice Input</string>
+    <string name="action_voice_input_title">Cornerstone Voice</string>
     <string name="action_voice_deleted_last_sentence">Deleted last sentence</string>
     <string name="action_voice_nothing_to_delete">Nothing to delete</string>
     <string name="action_voice_sent">Sent</string>

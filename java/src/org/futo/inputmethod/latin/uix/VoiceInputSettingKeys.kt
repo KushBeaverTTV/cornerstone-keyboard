@@ -44,9 +44,11 @@ val AUDIO_FOCUS = SettingsKey(
     default = true
 )
 
+// KBP: auto-stop on silence cut people off mid-thought — default OFF now.
+// Users who want it can re-enable in Voice Input settings.
 val USE_VAD_AUTOSTOP = SettingsKey(
     key = booleanPreferencesKey("use_vad_autostop"),
-    default = true
+    default = false
 )
 
 val ENGLISH_MODEL_INDEX = SettingsKey(

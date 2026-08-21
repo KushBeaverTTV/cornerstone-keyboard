@@ -123,6 +123,9 @@ class AudioRecognizer(
     // one failure disables partials for the rest of this recording session.
     private var partialDecodesDisabled = false
 
+    // KBP: master switch for streaming partials (see maybeLaunchPartialDecode).
+    private val enableStreamingPartials = false
+
     companion object {
         private const val PARTIAL_DECODE_INTERVAL_MS = 800L
         // Don't burn a decode on the first instant of audio — sub-second decodes
@@ -354,7 +357,9 @@ class AudioRecognizer(
 
             var isRunningOutOfSpace = (floatSamples.remaining() < nRead.coerceAtLeast(1600)) && !expandSpaceIfAllowed()
 
-            val hasNotTalkedRecently = hasTalked && (numConsecutiveNonSpeech > 66) && useVAD
+            // KBP: 66 frames (~2s) cut people off mid-thought on hesitations.
+            // ~6s of consecutive silence before auto-stopping.
+            val hasNotTalkedRecently = hasTalked && (numConsecutiveNonSpeech > 200) && useVAD
             if (isRunningOutOfSpace || hasNotTalkedRecently) {
                 yield()
                 withContext(Dispatchers.Main) {
@@ -484,6 +489,10 @@ class AudioRecognizer(
      * stream internally (see ParakeetSherpa.inferPartial).
      */
     private fun maybeLaunchPartialDecode() {
+        // KBP: streaming partials re-decode the ENTIRE buffer from scratch every
+        // interval, so cost grows with message length and long dictations lag.
+        // Off by default; final decode quality is unaffected.
+        if (!enableStreamingPartials) return
         if (partialDecodesDisabled) return
 
         val now = System.currentTimeMillis()
