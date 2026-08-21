@@ -4,11 +4,15 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.util.Log
-import androidx.compose.foundation.background
-import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
@@ -27,8 +31,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -42,9 +44,12 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.isActive
@@ -352,12 +357,17 @@ internal class AgentHubWindow(
     @Composable
     private fun HubTiles(onSelect: (String) -> Unit) {
         Column(modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
-            Text("Agent Hub", style = MaterialTheme.typography.titleLarge)
+            Text(
+                "Agent Hub",
+                fontSize = 22.sp,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurface
+            )
             Text(
                 "Tap an agent to open it. Long-press the sparkle key to quick-switch.",
-                style = MaterialTheme.typography.bodySmall,
+                fontSize = 13.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(top = 4.dp, bottom = 12.dp)
+                modifier = Modifier.padding(top = 4.dp, bottom = 20.dp)
             )
 
             if (!hubOnboarded) {
@@ -398,47 +408,52 @@ internal class AgentHubWindow(
     /** One-time explainer. "Got it" persists HUB_ONBOARDED so it never returns. */
     @Composable
     private fun OnboardingCard(onDismiss: () -> Unit) {
-        Surface(shape = MaterialTheme.shapes.medium, tonalElevation = 4.dp) {
-            Column(modifier = Modifier.fillMaxWidth().padding(12.dp)) {
-                Text("Welcome to the Agent Hub", style = MaterialTheme.typography.titleSmall)
-                Text(
-                    "Each tile is an AI agent you can talk to from any text field. " +
-                        "Open one, then ask it about your draft, have it rewrite or " +
-                        "summarize, or dictate a question by voice. Add your own agent " +
-                        "with the + tile below.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 4.dp, bottom = 8.dp)
-                )
-                Row(modifier = Modifier.fillMaxWidth()) {
-                    Spacer(modifier = Modifier.weight(1f))
-                    TextButton(onClick = onDismiss) { Text("Got it") }
-                }
+        HubCard(accentColor = MaterialTheme.colorScheme.primary) {
+            Text(
+                "Welcome to the Agent Hub",
+                fontSize = 15.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Text(
+                "Each tile is an AI agent you can talk to from any text field. " +
+                    "Open one, then ask it about your draft, have it rewrite or " +
+                    "summarize, or dictate a question by voice. Add your own agent " +
+                    "with the + tile below.",
+                fontSize = 13.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 4.dp, bottom = 12.dp)
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End
+            ) {
+                HubChip(text = "Got it", onClick = onDismiss)
             }
         }
     }
 
     @Composable
     private fun AddAgentTile(onClick: () -> Unit) {
-        Surface(
-            shape = MaterialTheme.shapes.medium,
-            tonalElevation = 0.dp,
-            modifier = Modifier.fillMaxWidth().clickable(onClick = onClick)
-        ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.padding(12.dp)
+        // outlineVariant border approximates the dashed "empty slot" look.
+        HubCard(onClick = onClick) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.fillMaxWidth()
             ) {
-                Text("＋", style = MaterialTheme.typography.titleMedium)
-                Spacer(modifier = Modifier.width(12.dp))
-                Column {
-                    Text("Add agent", style = MaterialTheme.typography.titleMedium)
-                    Text(
-                        "Your own agent: name, role, and system prompt.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
+                Text("+", color = MaterialTheme.colorScheme.primary, fontSize = 18.sp)
+                Text(
+                    "Add agent",
+                    fontSize = 15.sp,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.padding(top = 4.dp)
+                )
+                Text(
+                    "Your own agent: name, role, and system prompt.",
+                    fontSize = 13.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 2.dp)
+                )
             }
         }
     }
@@ -446,22 +461,30 @@ internal class AgentHubWindow(
     /** Confirm card for a long-pressed custom tile. Built-in agents can't be deleted. */
     @Composable
     private fun DeleteConfirmCard(agent: CustomAgent) {
-        Surface(shape = MaterialTheme.shapes.medium, tonalElevation = 4.dp) {
-            Column(modifier = Modifier.fillMaxWidth().padding(12.dp)) {
-                Text("Delete ${agent.name}?", style = MaterialTheme.typography.titleSmall)
-                Text(
-                    "Its conversation memory goes with it. This can't be undone.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 4.dp, bottom = 8.dp)
+        HubCard {
+            Text(
+                "Delete ${agent.name}?",
+                fontSize = 15.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Text(
+                "Its conversation memory goes with it. This can't be undone.",
+                fontSize = 13.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 4.dp, bottom = 12.dp)
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End
+            ) {
+                HubChip(text = "Cancel", onClick = { pendingDeleteAgent = null })
+                Spacer(modifier = Modifier.width(8.dp))
+                HubChip(
+                    text = "Delete",
+                    onClick = { deleteCustomAgent(agent) },
+                    textColor = MaterialTheme.colorScheme.error
                 )
-                Row(modifier = Modifier.fillMaxWidth()) {
-                    TextButton(onClick = { pendingDeleteAgent = null }) { Text("Cancel") }
-                    Spacer(modifier = Modifier.weight(1f))
-                    TextButton(onClick = { deleteCustomAgent(agent) }) {
-                        Text("Delete", color = MaterialTheme.colorScheme.error)
-                    }
-                }
             }
         }
     }
@@ -480,83 +503,79 @@ internal class AgentHubWindow(
 
     @Composable
     private fun CustomAgentTile(agent: CustomAgent, onClick: () -> Unit, onLongClick: () -> Unit) {
-        Surface(
-            shape = MaterialTheme.shapes.medium,
-            tonalElevation = 2.dp,
-            modifier = Modifier
-                .fillMaxWidth()
-                .agentTileClickable(onClick = onClick, onLongClick = onLongClick)
+        val selected = agent.id == selectedAgent
+        HubCard(
+            onClick = onClick,
+            onLongClick = onLongClick,
+            borderColor = if (selected) MaterialTheme.colorScheme.primary else null,
+            borderWidth = if (selected) 1.5.dp else 1.dp
         ) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.padding(12.dp)
+                modifier = Modifier.fillMaxWidth()
             ) {
-                // Custom agents aren't on the hub roster, so their reachability is
-                // genuinely unknown — the neutral dot says so instead of guessing.
-                StatusDot(online = null, unknown = true)
+                HubMonogram(name = agent.name, active = selected)
                 Spacer(modifier = Modifier.width(12.dp))
                 Column(modifier = Modifier.weight(1f)) {
-                    Text(agent.name, style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        agent.name,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
                     Text(
                         listOfNotNull(
                             agent.role.ifBlank { null },
                             "custom"
                         ).joinToString(" • "),
-                        style = MaterialTheme.typography.bodySmall,
+                        fontSize = 13.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-                if (agent.id == selectedAgent) {
-                    Text(
-                        "✓",
-                        style = MaterialTheme.typography.titleMedium,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                }
+                // Custom agents aren't on the hub roster, so their reachability is
+                // genuinely unknown — the neutral dot says so instead of guessing.
+                StatusDot(online = null, unknown = true)
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("›", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 20.sp)
             }
         }
     }
 
-    // Long-press-to-delete on tiles. Kept as a Modifier factory so the @OptIn
-    // for combinedClickable lives in exactly one place.
-    @OptIn(ExperimentalFoundationApi::class)
-    private fun Modifier.agentTileClickable(onClick: () -> Unit, onLongClick: () -> Unit): Modifier =
-        combinedClickable(onClick = onClick, onLongClick = onLongClick)
-
     @Composable
     private fun AgentTile(agentId: String, fallbackName: String, onClick: () -> Unit) {
         val status = statuses?.get(agentId)
-        Surface(
-            shape = MaterialTheme.shapes.medium,
-            tonalElevation = 2.dp,
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable(onClick = onClick)
+        val selected = agentId == selectedAgent
+        // The selected tile's primary ring is the selection signal — no checkmark.
+        HubCard(
+            onClick = onClick,
+            borderColor = if (selected) MaterialTheme.colorScheme.primary else null,
+            borderWidth = if (selected) 1.5.dp else 1.dp
         ) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.padding(12.dp)
+                modifier = Modifier.fillMaxWidth()
             ) {
-                StatusDot(online = status?.online, unknown = statusFetchFailed)
+                HubMonogram(
+                    name = status?.name ?: fallbackName,
+                    active = selected || status?.online == true
+                )
                 Spacer(modifier = Modifier.width(12.dp))
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         status?.name ?: fallbackName,
-                        style = MaterialTheme.typography.titleMedium
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface
                     )
                     Text(
                         tileSubtitle(status),
-                        style = MaterialTheme.typography.bodySmall,
+                        fontSize = 13.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-                if (agentId == selectedAgent) {
-                    Text(
-                        "✓",
-                        style = MaterialTheme.typography.titleMedium,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                }
+                StatusDot(online = status?.online, unknown = statusFetchFailed)
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("›", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 20.sp)
             }
         }
     }
@@ -679,55 +698,106 @@ internal class AgentHubWindow(
         val status = statuses?.get(agentId)
         val custom = customAgent(agentId)
 
-        TextButton(onClick = {
-            teardownDictation()
-            detailState = DetailState.Options
-            screen = HubScreen.Tiles
-        }) {
-            Text("← Back")
-        }
-
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            // Custom agents aren't on the hub roster — neutral dot, not a guess.
-            StatusDot(
-                online = status?.online,
-                unknown = statusFetchFailed || custom != null && status == null
+        // App-bar row: back chevron (48.dp touch target) + monogram + name with
+        // an inline status dot and subtitle. Back behavior is identical to the
+        // old "← Back" button: teardown dictation, reset state, go to Tiles.
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(48.dp)
+                    .clip(CircleShape)
+                    .clickable {
+                        teardownDictation()
+                        detailState = DetailState.Options
+                        screen = HubScreen.Tiles
+                    },
+                contentAlignment = Alignment.Center
+            ) {
+                Text("‹", color = MaterialTheme.colorScheme.primary, fontSize = 24.sp)
+            }
+            HubMonogram(
+                name = name,
+                // "active" means reachable, not merely open — every Detail view
+                // is the selected agent, so selectedAgent can't be the signal.
+                active = status?.online == true,
+                size = 32.dp
             )
-            Spacer(modifier = Modifier.width(8.dp))
-            Text(name, style = MaterialTheme.typography.titleLarge)
-        }
-        Text(
-            detailSubtitle(agentId, status),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(top = 2.dp, bottom = 12.dp)
-        )
-
-        // AgentMemory is not Compose state, but every record() is immediately
-        // followed by a detailState change, which recomposes this header — so
-        // the count read here is always fresh by the time it could go stale.
-        val memoryCount = AgentMemory.count(agentId)
-        if (memoryCount > 0) {
-            Text(
-                "context: $memoryCount exchange" + if (memoryCount == 1) "" else "s",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(bottom = 12.dp)
-            )
+            Spacer(modifier = Modifier.width(12.dp))
+            Column {
+                Text(
+                    name,
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    // Custom agents aren't on the hub roster — neutral dot, not a guess.
+                    StatusDot(
+                        online = status?.online,
+                        unknown = statusFetchFailed || custom != null && status == null
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    // AgentMemory is not Compose state, but every record() is immediately
+                    // followed by a detailState change, which recomposes this header — so
+                    // the count read here is always fresh by the time it could go stale.
+                    val memoryCount = AgentMemory.count(agentId)
+                    Text(
+                        detailSubtitle(agentId, status) +
+                            if (memoryCount > 0) {
+                                " · $memoryCount exchange" + if (memoryCount == 1) "" else "s"
+                            } else {
+                                ""
+                            },
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
         }
 
         when (val state = detailState) {
             DetailState.Options -> DetailOptions(agentId)
             DetailState.Dictating -> DictationPanel(agentId)
-            DetailState.Thinking -> Text(
-                "⏳ $name is thinking…",
-                style = MaterialTheme.typography.bodyMedium,
-                modifier = Modifier.padding(vertical = 24.dp)
-            )
-
+            DetailState.Thinking -> ThinkingView(name)
             is DetailState.Answered -> AnswerView(state)
-            is DetailState.Failed -> MessageWithBack(state.message)
-            is DetailState.Hint -> MessageWithBack(state.message)
+            is DetailState.Failed -> MessageWithBack(state.message, isError = true)
+            is DetailState.Hint -> MessageWithBack(state.message, isError = false)
+        }
+    }
+
+    /** Pulsing monogram + amber progress while a request is in flight. */
+    @Composable
+    private fun ThinkingView(name: String) {
+        val transition = rememberInfiniteTransition(label = "hubThinking")
+        val pulse by transition.animateFloat(
+            initialValue = 0.4f,
+            targetValue = 1f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(durationMillis = 900, easing = FastOutSlowInEasing),
+                repeatMode = RepeatMode.Reverse
+            ),
+            label = "hubThinkingAlpha"
+        )
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier.fillMaxWidth().padding(vertical = 24.dp)
+        ) {
+            HubMonogram(name = name, active = true, modifier = Modifier.alpha(pulse))
+            Spacer(modifier = Modifier.height(12.dp))
+            Text(
+                "$name is thinking",
+                fontSize = 15.sp,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+            LinearProgressIndicator(
+                color = MaterialTheme.colorScheme.primary,
+                trackColor = MaterialTheme.colorScheme.outlineVariant,
+                modifier = Modifier.width(120.dp)
+            )
         }
     }
 
@@ -759,59 +829,70 @@ internal class AgentHubWindow(
         val tokenMissing = agentToken().isBlank()
 
         Column(modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text("Use whole field", style = MaterialTheme.typography.bodyMedium)
-                    Text(
-                        "Send the entire field, not just text before the cursor",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                Switch(
-                    checked = wholeField,
-                    onCheckedChange = {
-                        wholeField = it
-                        context.setSettingBlocking(AGENT_WHOLE_FIELD.key, it)
-                    }
-                )
-            }
-
-            // Voice first: the spoken text is sent as-is (no prefix, no draft needed).
-            OutlinedButton(
-                onClick = { startDictation(agentId) },
-                enabled = !passwordGuard && !tokenMissing,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text("🎤 Ask by voice")
-            }
-            Spacer(modifier = Modifier.height(8.dp))
-
-            HUB_OPTIONS.forEach { option ->
-                OutlinedButton(
-                    onClick = { runOption(agentId, option) },
-                    enabled = !passwordGuard && !tokenMissing,
+            HubCard {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Text(option.label)
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            "Use whole field",
+                            fontSize = 15.sp,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            "Send the entire field, not just text before the cursor",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(
+                        checked = wholeField,
+                        onCheckedChange = {
+                            wholeField = it
+                            context.setSettingBlocking(AGENT_WHOLE_FIELD.key, it)
+                        }
+                    )
                 }
-                Spacer(modifier = Modifier.height(8.dp))
             }
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Voice first: the spoken text is sent as-is (no prefix, no draft needed).
+            HubPrimaryPill(
+                text = "Ask by voice",
+                onClick = { startDictation(agentId) },
+                enabled = !passwordGuard && !tokenMissing
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+
+            HubRowCard(
+                rows = HUB_OPTIONS.map { option ->
+                    HubRow(
+                        label = option.label,
+                        enabled = !passwordGuard && !tokenMissing,
+                        onClick = { runOption(agentId, option) }
+                    )
+                }
+            )
+
             if (passwordGuard) {
-                Text(
-                    "${agentName(agentId)} is disabled in password fields.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error
-                )
+                Spacer(modifier = Modifier.height(12.dp))
+                HubCard(accentColor = MaterialTheme.colorScheme.error) {
+                    Text(
+                        "${agentName(agentId)} is disabled in password fields.",
+                        fontSize = 14.sp,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
             } else if (tokenMissing) {
-                Text(
-                    "Agent token is not set. Configure the 'agent_key_token' setting to use the agent.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error
-                )
+                Spacer(modifier = Modifier.height(12.dp))
+                HubCard(accentColor = MaterialTheme.colorScheme.error) {
+                    Text(
+                        "Agent token is not set. Configure the 'agent_key_token' setting to use the agent.",
+                        fontSize = 14.sp,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
             }
 
             DeviceActionsSection(agentId)
@@ -828,165 +909,144 @@ internal class AgentHubWindow(
         val scope = rememberCoroutineScope()
         val lastAnswer = AgentMemory.lastAnswer(agentId)
 
-        Spacer(modifier = Modifier.height(16.dp))
-        Text("Device actions", style = MaterialTheme.typography.titleSmall)
+        Spacer(modifier = Modifier.height(20.dp))
+        HubSectionLabel("DEVICE ACTIONS")
         Text(
             "Helpers that run on this phone. No new permissions.",
-            style = MaterialTheme.typography.bodySmall,
+            fontSize = 13.sp,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(top = 2.dp, bottom = 8.dp)
+            modifier = Modifier.padding(top = 4.dp, bottom = 10.dp)
         )
 
-        OutlinedButton(
-            onClick = {
-                if (!openAlarmSetter(context)) manager.announce("No clock app on this device")
-            },
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Text("⏰ Set alarm")
-        }
-        Spacer(modifier = Modifier.height(8.dp))
-
-        OutlinedButton(
-            onClick = {
-                if (setTorch(context, !torchOn)) {
-                    torchOn = !torchOn
-                    manager.announce(if (torchOn) "Flashlight on" else "Flashlight off")
-                } else {
-                    manager.announce("Flashlight unavailable on this device")
-                }
-            },
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Text(if (torchOn) "🔦 Flashlight (on)" else "🔦 Flashlight")
-        }
-        Spacer(modifier = Modifier.height(8.dp))
-
-        OutlinedButton(
-            onClick = { lastAnswer?.let { copyAnswer(it) } },
-            enabled = lastAnswer != null,
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Text("📋 Copy last answer")
-        }
-        if (lastAnswer == null) {
-            Text(
-                "Nothing to copy yet — ask ${agentName(agentId)} something first.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(top = 2.dp, bottom = 8.dp)
-            )
-        } else {
-            Spacer(modifier = Modifier.height(8.dp))
-        }
-
-        // Stub: the hub has no find-my-phone endpoint today, so a failure is
-        // reported as "not wired yet", never as success.
-        OutlinedButton(
-            onClick = {
-                scope.launch(Dispatchers.IO) {
-                    val wired = requestFindMyPhone(agentToken())
-                    withContext(Dispatchers.Main) {
-                        if (wired) {
-                            manager.announce("Find-my-phone request sent")
-                        } else {
-                            detailState = DetailState.Hint(
-                                "Find my phone isn't wired yet — the hub has no endpoint for it."
-                            )
+        HubRowCard(
+            rows = listOf(
+                HubRow("Set alarm") {
+                    if (!openAlarmSetter(context)) manager.announce("No clock app on this device")
+                },
+                HubRow(if (torchOn) "Flashlight (on)" else "Flashlight") {
+                    if (setTorch(context, !torchOn)) {
+                        torchOn = !torchOn
+                        manager.announce(if (torchOn) "Flashlight on" else "Flashlight off")
+                    } else {
+                        manager.announce("Flashlight unavailable on this device")
+                    }
+                },
+                HubRow("Copy last answer", enabled = lastAnswer != null) {
+                    lastAnswer?.let { copyAnswer(it) }
+                },
+                // Stub: the hub has no find-my-phone endpoint today, so a failure is
+                // reported as "not wired yet", never as success.
+                HubRow("Find my phone (not wired yet)") {
+                    scope.launch(Dispatchers.IO) {
+                        val wired = requestFindMyPhone(agentToken())
+                        withContext(Dispatchers.Main) {
+                            if (wired) {
+                                manager.announce("Find-my-phone request sent")
+                            } else {
+                                detailState = DetailState.Hint(
+                                    "Find my phone isn't wired yet — the hub has no endpoint for it."
+                                )
+                            }
                         }
                     }
                 }
-            },
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Text("📱 Find my phone (not wired yet)")
+            )
+        )
+        if (lastAnswer == null) {
+            Text(
+                "Nothing to copy yet — ask ${agentName(agentId)} something first.",
+                fontSize = 13.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 8.dp)
+            )
         }
     }
 
     @Composable
     private fun ColumnScope.AnswerView(state: DetailState.Answered) {
-        Text(
-            "${agentName(state.request.agentId)} says:",
-            style = MaterialTheme.typography.titleSmall,
+        HubSectionLabel(
+            agentName(state.request.agentId),
             modifier = Modifier.padding(bottom = 8.dp)
         )
-        // Bounded height, NOT weight(1f): the IME action window can measure this
-        // Column as wrap-content, in which case a weighted box collapses to zero
-        // height and the answer renders invisibly (confirmed on emulator 2026-08-21).
-        // 320dp fits ~8 lines and scrolls for longer answers.
-        Box(
-            modifier = Modifier
-                .heightIn(min = 120.dp, max = 320.dp)
-                .fillMaxWidth()
-                .verticalScroll(rememberScrollState())
-        ) {
-            // Explicit onSurface: the IME window's default content color is not
-            // guaranteed light on every theme path, and an invisible answer
-            // renders as a dead black gap (seen on emulator 2026-08-21).
-            Text(
-                state.answer,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurface
-            )
+        HubCard {
+            // Bounded height, NOT weight(1f): the IME action window can measure this
+            // Column as wrap-content, in which case a weighted box collapses to zero
+            // height and the answer renders invisibly (confirmed on emulator 2026-08-21).
+            // 320dp fits ~8 lines and scrolls for longer answers.
+            Box(
+                modifier = Modifier
+                    .heightIn(min = 120.dp, max = 320.dp)
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
+            ) {
+                // Explicit onSurface: the IME window's default content color is not
+                // guaranteed light on every theme path, and an invisible answer
+                // renders as a dead black gap (seen on emulator 2026-08-21).
+                Text(
+                    state.answer,
+                    fontSize = 15.sp,
+                    lineHeight = 22.sp,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+            }
         }
         // Primary action pinned OUTSIDE the scroll row: Insert must never be
         // hidden off-screen. Secondary actions scroll horizontally.
         Row(modifier = Modifier.fillMaxWidth().padding(top = 12.dp)) {
-            TextButton(onClick = { detailState = DetailState.Options }) {
-                Text("Back")
-            }
+            HubChip(text = "Back", onClick = { detailState = DetailState.Options })
             Spacer(modifier = Modifier.weight(1f))
-            Button(onClick = { insertAnswer(state.answer) }) {
-                Text("Insert")
-            }
+            HubPrimaryPill(
+                text = "Insert",
+                onClick = { insertAnswer(state.answer) },
+                compact = true
+            )
         }
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .horizontalScroll(rememberScrollState())
-                .padding(top = 4.dp)
+                .padding(top = 8.dp)
         ) {
             // Replace only exists when a draft was captured — dictation answers
             // have nothing before the cursor to swap out.
             if (state.request.draftDeleteCount > 0) {
-                OutlinedButton(onClick = { replaceDraftWith(state) }) {
-                    Text("Replace draft")
-                }
-                Spacer(modifier = Modifier.width(4.dp))
+                HubChip(text = "Replace draft", onClick = { replaceDraftWith(state) })
+                Spacer(modifier = Modifier.width(8.dp))
             }
-            OutlinedButton(onClick = { copyAnswer(state.answer) }) {
-                Text("Copy")
-            }
-            Spacer(modifier = Modifier.width(4.dp))
-            OutlinedButton(onClick = { postPrompt(state.request) }) {
-                Text("Regenerate")
-            }
+            HubChip(text = "Copy", onClick = { copyAnswer(state.answer) })
+            Spacer(modifier = Modifier.width(8.dp))
+            HubChip(text = "Regenerate", onClick = { postPrompt(state.request) })
         }
     }
 
-    // In-window dictation panel: embeds the shared RecognizerView, with Cancel
-    // pinned at the bottom like the Answered view's buttons.
+    // In-window dictation panel: embeds the shared RecognizerView. Cancel is an
+    // UNWEIGHTED sibling below the weighted card: when the IME window
+    // wrap-measures this Column, weighted children collapse to zero height — if
+    // Cancel lived inside the weight, the whole dictation UI could vanish.
     @Composable
     private fun ColumnScope.DictationPanel(agentId: String) {
-        Box(
-            modifier = Modifier.weight(1f).fillMaxWidth(),
-            contentAlignment = Alignment.Center
-        ) {
-            when {
-                dictationModelMissing -> DictationModelDownloading(onReady = { startDictation(agentId) })
-                dictationView != null -> dictationView!!.Content()
-                else -> Text(
-                    "Starting microphone…",
-                    style = MaterialTheme.typography.bodyMedium
-                )
+        HubCard(modifier = Modifier.weight(1f)) {
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ) {
+                when {
+                    dictationModelMissing -> DictationModelDownloading(onReady = { startDictation(agentId) })
+                    dictationView != null -> dictationView!!.Content()
+                    else -> Text(
+                        "Starting microphone…",
+                        fontSize = 14.sp,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                }
             }
         }
-        OutlinedButton(
+        Spacer(modifier = Modifier.height(12.dp))
+        HubChip(
+            text = "Cancel",
             onClick = { cancelDictation() },
             modifier = Modifier.fillMaxWidth()
-        ) {
-            Text("Cancel")
-        }
+        )
     }
 
     // Same text state CornerstoneModelDownloadWindow shows, inline in the panel.
@@ -1004,15 +1064,25 @@ internal class AgentHubWindow(
                     percent >= 0 -> "Downloading voice model… $percent%"
                     else -> "Preparing voice model download…"
                 },
-                textAlign = TextAlign.Center
+                textAlign = TextAlign.Center,
+                fontSize = 14.sp,
+                color = MaterialTheme.colorScheme.onSurface
             )
             if (error == null && percent in 0..99) {
                 LinearProgressIndicator(
                     progress = { percent / 100f },
+                    color = MaterialTheme.colorScheme.primary,
+                    trackColor = MaterialTheme.colorScheme.outlineVariant,
                     modifier = Modifier.padding(top = 12.dp)
                 )
                 if (status.isNotBlank()) {
-                    Text(status, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 8.dp))
+                    Text(
+                        status,
+                        textAlign = TextAlign.Center,
+                        fontSize = 13.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 8.dp)
+                    )
                 }
             }
         }
@@ -1026,15 +1096,23 @@ internal class AgentHubWindow(
     }
 
     @Composable
-    private fun MessageWithBack(message: String) {
-        Text(
-            message,
-            style = MaterialTheme.typography.bodyMedium,
-            modifier = Modifier.padding(vertical = 24.dp)
-        )
-        TextButton(onClick = { detailState = DetailState.Options }) {
-            Text("Back")
+    private fun MessageWithBack(message: String, isError: Boolean) {
+        HubCard(
+            accentColor = if (isError) {
+                MaterialTheme.colorScheme.error
+            } else {
+                MaterialTheme.colorScheme.primary
+            }
+        ) {
+            Text(
+                message,
+                fontSize = 14.sp,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.fillMaxWidth()
+            )
         }
+        Spacer(modifier = Modifier.height(12.dp))
+        HubChip(text = "Back", onClick = { detailState = DetailState.Options })
     }
 
     // ---- Actions ----
@@ -1331,17 +1409,7 @@ internal class AgentHubWindow(
 
     @Composable
     private fun StatusDot(online: Boolean?, unknown: Boolean) {
-        // Theme colors only: primary = online, error = offline, outline = unknown.
-        val color = when {
-            unknown -> MaterialTheme.colorScheme.outline
-            online == true -> MaterialTheme.colorScheme.primary
-            else -> MaterialTheme.colorScheme.error
-        }
-        Box(
-            modifier = Modifier
-                .size(10.dp)
-                .clip(CircleShape)
-                .background(color)
-        )
+        // Semantics unchanged: primary = online, error = offline, outline = unknown.
+        HubStatusDot(online = online, unknown = unknown)
     }
 }
