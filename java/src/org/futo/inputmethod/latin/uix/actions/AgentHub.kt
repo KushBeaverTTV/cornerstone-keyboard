@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -491,27 +492,42 @@ internal class AgentHubWindow(
             style = MaterialTheme.typography.titleSmall,
             modifier = Modifier.padding(bottom = 8.dp)
         )
-        // weight(1f) so a long answer scrolls without pushing the buttons off-screen.
+        // Bounded height, NOT weight(1f): the IME action window can measure this
+        // Column as wrap-content, in which case a weighted box collapses to zero
+        // height and the answer renders invisibly (confirmed on emulator 2026-08-21).
+        // 320dp fits ~8 lines and scrolls for longer answers.
         Box(
             modifier = Modifier
-                .weight(1f)
+                .heightIn(min = 120.dp, max = 320.dp)
                 .fillMaxWidth()
                 .verticalScroll(rememberScrollState())
         ) {
-            Text(state.answer, style = MaterialTheme.typography.bodyMedium)
+            // Explicit onSurface: the IME window's default content color is not
+            // guaranteed light on every theme path, and an invisible answer
+            // renders as a dead black gap (seen on emulator 2026-08-21).
+            Text(
+                state.answer,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurface
+            )
         }
-        // One horizontally scrollable row: five buttons don't fit a narrow
-        // screen, and Insert stays the rightmost primary action.
+        // Primary action pinned OUTSIDE the scroll row: Insert must never be
+        // hidden off-screen. Secondary actions scroll horizontally.
+        Row(modifier = Modifier.fillMaxWidth().padding(top = 12.dp)) {
+            TextButton(onClick = { detailState = DetailState.Options }) {
+                Text("Back")
+            }
+            Spacer(modifier = Modifier.weight(1f))
+            Button(onClick = { insertAnswer(state.answer) }) {
+                Text("Insert")
+            }
+        }
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .horizontalScroll(rememberScrollState())
-                .padding(top = 12.dp)
+                .padding(top = 4.dp)
         ) {
-            TextButton(onClick = { detailState = DetailState.Options }) {
-                Text("Back")
-            }
-            Spacer(modifier = Modifier.width(4.dp))
             // Replace only exists when a draft was captured — dictation answers
             // have nothing before the cursor to swap out.
             if (state.request.draftDeleteCount > 0) {
@@ -526,10 +542,6 @@ internal class AgentHubWindow(
             Spacer(modifier = Modifier.width(4.dp))
             OutlinedButton(onClick = { postPrompt(state.request) }) {
                 Text("Regenerate")
-            }
-            Spacer(modifier = Modifier.width(4.dp))
-            Button(onClick = { insertAnswer(state.answer) }) {
-                Text("Insert")
             }
         }
     }
@@ -669,6 +681,7 @@ internal class AgentHubWindow(
                 append(request.userText)
             }
             val answer = postToAgent(prompt, token, request.agentId)
+            Log.i("AgentHub", "answer from ${request.agentId}: len=${answer?.length} head=${answer?.take(60)}")
             withContext(Dispatchers.Main) {
                 detailState = if (answer != null) {
                     AgentMemory.record(request.agentId, request.label, request.userText, answer)
