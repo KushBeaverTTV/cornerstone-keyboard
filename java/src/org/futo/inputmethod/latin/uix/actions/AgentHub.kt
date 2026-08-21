@@ -1,8 +1,12 @@
 package org.futo.inputmethod.latin.uix.actions
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.util.Log
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
@@ -115,6 +119,70 @@ internal fun fetchAgentStatuses(): Map<String, AgentStatus>? {
     }
 }
 
+// ---- Short agent memory ----
+
+/**
+ * One completed exchange with an agent, kept so follow-ups ("make it shorter")
+ * have context. The label records which operation produced the answer.
+ */
+internal data class AgentExchange(
+    val label: String,
+    val draftSummary: String,
+    val answerSummary: String
+)
+
+/**
+ * Short per-agent memory for the prototype: the last few exchanges, held in
+ * process memory keyed by agent id. No persistence — user text never hits
+ * disk, and a restarted keyboard process simply starts blank.
+ *
+ * Behavior needed: FIFO with a hard size bound → one ArrayDeque per agent,
+ * evicting the oldest entry in O(1) when full. All methods are @Synchronized
+ * because prompt composition reads on Dispatchers.IO while record() writes on
+ * the main thread after a request completes.
+ */
+internal object AgentMemory {
+    private const val MAX_EXCHANGES = 6
+
+    // Truncations keep the composed prompt compact: summaries orient the agent,
+    // they don't need to carry the full text again.
+    private const val DRAFT_SUMMARY_CHARS = 80
+    private const val ANSWER_SUMMARY_CHARS = 300
+
+    private val exchanges = mutableMapOf<String, ArrayDeque<AgentExchange>>()
+
+    /** Store a successful exchange, evicting the oldest once past the bound. */
+    @Synchronized
+    fun record(agentId: String, label: String, userText: String, answer: String) {
+        val queue = exchanges.getOrPut(agentId) { ArrayDeque() }
+        queue.addLast(
+            AgentExchange(
+                label = label,
+                draftSummary = userText.take(DRAFT_SUMMARY_CHARS),
+                answerSummary = answer.take(ANSWER_SUMMARY_CHARS)
+            )
+        )
+        while (queue.size > MAX_EXCHANGES) queue.removeFirst()
+    }
+
+    /** How many exchanges are remembered for this agent (0 when none). */
+    @Synchronized
+    fun count(agentId: String): Int = exchanges[agentId]?.size ?: 0
+
+    /**
+     * Compact "Recent conversation:" block to prepend to a prompt, oldest
+     * first, or null when this agent has no history (nothing to prepend).
+     */
+    @Synchronized
+    fun contextBlock(agentId: String): String? {
+        val queue = exchanges[agentId]?.takeIf { it.isNotEmpty() } ?: return null
+        val lines = queue.mapIndexed { index, exchange ->
+            "${index + 1}. [${exchange.label}] draft: \"${exchange.draftSummary}\" -> you: \"${exchange.answerSummary}\""
+        }
+        return "Recent conversation:\n" + lines.joinToString("\n")
+    }
+}
+
 /** In-window navigation: tiles overview <-> one agent's detail view. */
 private sealed class HubScreen {
     object Tiles : HubScreen()
@@ -126,10 +194,29 @@ private sealed class DetailState {
     object Options : DetailState()
     object Dictating : DetailState()
     object Thinking : DetailState()
-    data class Answered(val answer: String) : DetailState()
+
+    /**
+     * An answer is showing. Keeps the originating request so the action row
+     * can Replace (delete-then-type needs the draft's delete count) and
+     * Regenerate (re-run needs the prompt parts) without re-deriving them.
+     */
+    data class Answered(val answer: String, val request: AgentRequest) : DetailState()
     data class Failed(val message: String) : DetailState()
     data class Hint(val message: String) : DetailState()
 }
+
+/**
+ * Everything postPrompt needs to run one agent request and remember it
+ * afterwards. Grouped into an object because runOption, dictation, and
+ * Regenerate all build the same bundle — five loose parameters would drift.
+ */
+private data class AgentRequest(
+    val agentId: String,
+    val label: String,         // option label, or "Ask by voice" for dictation
+    val promptPrefix: String,  // "" for dictation: the spoken text is the whole prompt
+    val userText: String,      // captured draft, or the spoken question
+    val draftDeleteCount: Int  // code points to delete for Replace; 0 = no draft captured
+)
 
 /** One interaction option: label shown on the button, prompt prefix sent to the agent. */
 private data class HubOption(val label: String, val promptPrefix: String)
@@ -314,6 +401,19 @@ internal class AgentHubWindow(
             modifier = Modifier.padding(top = 2.dp, bottom = 12.dp)
         )
 
+        // AgentMemory is not Compose state, but every record() is immediately
+        // followed by a detailState change, which recomposes this header — so
+        // the count read here is always fresh by the time it could go stale.
+        val memoryCount = AgentMemory.count(agentId)
+        if (memoryCount > 0) {
+            Text(
+                "context: $memoryCount exchange" + if (memoryCount == 1) "" else "s",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(bottom = 12.dp)
+            )
+        }
+
         when (val state = detailState) {
             DetailState.Options -> DetailOptions(agentId)
             DetailState.Dictating -> DictationPanel(agentId)
@@ -323,7 +423,7 @@ internal class AgentHubWindow(
                 modifier = Modifier.padding(vertical = 24.dp)
             )
 
-            is DetailState.Answered -> AnswerView(name, state.answer)
+            is DetailState.Answered -> AnswerView(state)
             is DetailState.Failed -> MessageWithBack(state.message)
             is DetailState.Hint -> MessageWithBack(state.message)
         }
@@ -385,9 +485,9 @@ internal class AgentHubWindow(
     }
 
     @Composable
-    private fun ColumnScope.AnswerView(name: String, answer: String) {
+    private fun ColumnScope.AnswerView(state: DetailState.Answered) {
         Text(
-            "$name says:",
+            "${agentName(state.request.agentId)} says:",
             style = MaterialTheme.typography.titleSmall,
             modifier = Modifier.padding(bottom = 8.dp)
         )
@@ -398,17 +498,37 @@ internal class AgentHubWindow(
                 .fillMaxWidth()
                 .verticalScroll(rememberScrollState())
         ) {
-            Text(answer, style = MaterialTheme.typography.bodyMedium)
+            Text(state.answer, style = MaterialTheme.typography.bodyMedium)
         }
-        Row(modifier = Modifier.fillMaxWidth().padding(top = 12.dp)) {
+        // One horizontally scrollable row: five buttons don't fit a narrow
+        // screen, and Insert stays the rightmost primary action.
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState())
+                .padding(top = 12.dp)
+        ) {
             TextButton(onClick = { detailState = DetailState.Options }) {
                 Text("Back")
             }
-            Spacer(modifier = Modifier.weight(1f))
-            Button(onClick = {
-                manager.typeText(answer)
-                manager.closeActionWindow()
-            }) {
+            Spacer(modifier = Modifier.width(4.dp))
+            // Replace only exists when a draft was captured — dictation answers
+            // have nothing before the cursor to swap out.
+            if (state.request.draftDeleteCount > 0) {
+                OutlinedButton(onClick = { replaceDraftWith(state) }) {
+                    Text("Replace draft")
+                }
+                Spacer(modifier = Modifier.width(4.dp))
+            }
+            OutlinedButton(onClick = { copyAnswer(state.answer) }) {
+                Text("Copy")
+            }
+            Spacer(modifier = Modifier.width(4.dp))
+            OutlinedButton(onClick = { postPrompt(state.request) }) {
+                Text("Regenerate")
+            }
+            Spacer(modifier = Modifier.width(4.dp))
+            Button(onClick = { insertAnswer(state.answer) }) {
                 Text("Insert")
             }
         }
@@ -503,16 +623,30 @@ internal class AgentHubWindow(
             return
         }
 
-        // The composed prompt IS the text — postToAgent takes the full string.
-        postPrompt(agentId, option.promptPrefix + draft)
+        // Delete count for a later Replace: CODE_DELETE removes one code point
+        // per event, so count code points, not UTF-16 units (an emoji is two
+        // units). Grapheme clusters (emoji + modifiers) can still drift by one
+        // — acceptable approximation for the prototype.
+        postPrompt(
+            AgentRequest(
+                agentId = agentId,
+                label = option.label,
+                promptPrefix = option.promptPrefix,
+                userText = draft,
+                draftDeleteCount = draft.codePointCount(0, draft.length)
+            )
+        )
     }
 
     /**
-     * Shared tail of every prompt path (button options and voice dictation):
-     * Thinking on the Main dispatcher, POST off it, result back on Main.
+     * Shared tail of every prompt path (button options, voice dictation, and
+     * Regenerate): Thinking on the Main dispatcher, POST off it, result back
+     * on Main. Recent exchanges are prepended here — once per send — so a
+     * re-run sees the conversation it is continuing, and only successful
+     * answers become memory (failures carry nothing a follow-up could use).
      */
-    private fun postPrompt(agentId: String, prompt: String) {
-        val name = agentName(agentId)
+    private fun postPrompt(request: AgentRequest) {
+        val name = agentName(request.agentId)
 
         val token = agentToken()
         if (token.isBlank()) {
@@ -522,15 +656,58 @@ internal class AgentHubWindow(
 
         detailState = DetailState.Thinking
         manager.getLifecycleScope().launch(Dispatchers.IO) {
-            val answer = postToAgent(prompt, token, agentId)
+            // The composed prompt IS the text — postToAgent takes the full string.
+            // Memory goes first so the agent sees its own prior answers before
+            // the new request.
+            val memoryContext = AgentMemory.contextBlock(request.agentId)
+            val prompt = buildString {
+                if (memoryContext != null) {
+                    append(memoryContext)
+                    append("\n\n")
+                }
+                append(request.promptPrefix)
+                append(request.userText)
+            }
+            val answer = postToAgent(prompt, token, request.agentId)
             withContext(Dispatchers.Main) {
                 detailState = if (answer != null) {
-                    DetailState.Answered(answer)
+                    AgentMemory.record(request.agentId, request.label, request.userText, answer)
+                    DetailState.Answered(answer, request)
                 } else {
                     DetailState.Failed("$name request failed. Check connection and token.")
                 }
             }
         }
+    }
+
+    private fun insertAnswer(answer: String) {
+        manager.typeText(answer)
+        manager.closeActionWindow()
+    }
+
+    /**
+     * Replace draft: delete exactly what the request captured before the
+     * cursor, then type the answer in its place. ActionInputTransaction has no
+     * replace/setText capability, and KeyboardManagerForAction's only deletion
+     * API is backspace(amount) — so delete-then-type is the clean
+     * implementation with the APIs that exist.
+     *
+     * Known limitation (prototype): if the field changed after the request
+     * started, backspace removes whatever is before the cursor now. The hub
+     * window keeps the keyboard open, so mid-request edits are unlikely.
+     */
+    private fun replaceDraftWith(state: DetailState.Answered) {
+        manager.backspace(state.request.draftDeleteCount)
+        manager.typeText(state.answer)
+        manager.closeActionWindow()
+    }
+
+    private fun copyAnswer(answer: String) {
+        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        clipboard.setPrimaryClip(ClipData.newPlainText("Agent answer", answer))
+        // Stay in the window — the user may want to Copy and then Insert too.
+        // announce() gives confirmation without new UI state.
+        manager.announce("Answer copied")
     }
 
     // ---- Dictation (Ask by voice) ----
@@ -658,8 +835,17 @@ internal class AgentHubWindow(
                     detailState = DetailState.Hint("Didn't catch that — try again.")
                     return@launch
                 }
-                // The spoken text IS the question — no prefix, no draft.
-                postPrompt(agentId, result)
+                // The spoken text IS the question — no prefix, no draft, so no
+                // Replace (draftDeleteCount = 0 hides the button).
+                postPrompt(
+                    AgentRequest(
+                        agentId = agentId,
+                        label = "Ask by voice",
+                        promptPrefix = "",
+                        userText = result,
+                        draftDeleteCount = 0
+                    )
+                )
             }
         }
 
