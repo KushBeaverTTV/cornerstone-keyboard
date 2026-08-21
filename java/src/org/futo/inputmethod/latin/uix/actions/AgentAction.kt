@@ -23,8 +23,9 @@ import java.util.concurrent.TimeUnit
 
 // Prototype endpoint, reached over plain HTTP inside the encrypted Tailscale
 // mesh (cleartext allowed for this host only, see res/xml/network_security_config.xml).
-// Change here if the endpoint moves.
-private const val AGENT_ENDPOINT = "http://100.100.194.62:8877/agentkey"
+// Change here if the endpoint moves. Custom agents default to this; a custom
+// agent may carry its own endpoint URL override (same Bearer contract).
+internal const val DEFAULT_AGENT_ENDPOINT = "http://100.100.194.62:8877/agentkey"
 
 // Bearer token lives in DataStore only — NEVER hardcode a token in this repo.
 // Empty default = feature explains itself and refuses to fire.
@@ -63,11 +64,17 @@ internal fun isPasswordField(inputType: Int): Boolean {
 }
 
 // `draft` is the full text to send — callers compose any prompt into it first.
-internal fun postToAgent(draft: String, token: String, agent: String): String? {
+// `endpoint` defaults to the shared hub; custom agents pass their override URL.
+internal fun postToAgent(
+    draft: String,
+    token: String,
+    agent: String,
+    endpoint: String = DEFAULT_AGENT_ENDPOINT
+): String? {
     val body = JSONObject().put("text", draft).put("agent", agent).toString()
         .toRequestBody("application/json; charset=utf-8".toMediaType())
     val request = Request.Builder()
-        .url(AGENT_ENDPOINT)
+        .url(endpoint)
         .header("Authorization", "Bearer $token")
         .post(body)
         .build()
@@ -121,13 +128,14 @@ val AgentAction = Action(
     name = R.string.action_agent_title,
     // Tap opens the Agent Hub window; the network call now happens from there.
     simplePressImpl = null,
-    // Long-press: pick which agent answers (Kimi / Aurora / Prima)
+    // Long-press: pick which agent answers (built-ins + any custom agents)
     altPressImpl = { manager, _ ->
         val context = manager.getContext()
         val current = context.getSetting(AGENT_KEY_AGENT)
+        val choices = AGENT_CHOICES + loadCustomAgents(context).map { it.id to it.name }
         manager.requestDialog(
-            "Agent answering: ${agentDisplayName(current)}\n\nTap to switch:",
-            AGENT_CHOICES.map { (id, name) ->
+            "Agent answering: ${agentDisplayName(context, current)}\n\nTap to switch:",
+            choices.map { (id, name) ->
                 DialogRequestItem(if (id == current) "✓ $name" else name) {
                     context.setSettingBlocking(AGENT_KEY_AGENT.key, id)
                     showAnswerOnStrip(manager, "Agent: $name")

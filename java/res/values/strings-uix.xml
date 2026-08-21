@@ -153,6 +153,7 @@
     <string name="theme_default_light">Light Mode</string>
     <string name="theme_amoled_dark">AMOLED Dark Purple</string>
     <string name="theme_cornerstone">Cornerstone</string>
+    <string name="theme_cornerstone_amber">Cornerstone Amber</string>
     <string name="theme_catppuccin_mocha">Catppuccin Mocha</string>
     <string name="theme_classic_dark">AOSP Material Dark</string>
     <string name="theme_classic_light">AOSP Material Light</string>
@@ -707,4 +708,8 @@ Default is %1$s</string>
 
     <!-- Agent Key (P3 prototype) -->
     <string name="action_agent_title">Agent</string>
+
+    <!-- Wave 2 daily-driver actions -->
+    <string name="action_quick_clipboard_title">Quick Clipboard</string>
+    <string name="action_text_expansion_title">Text Expansion</string>
 </resources>

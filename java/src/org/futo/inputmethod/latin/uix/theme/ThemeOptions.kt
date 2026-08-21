@@ -10,6 +10,7 @@ import org.futo.inputmethod.latin.uix.theme.presets.AMOLEDDarkPurple
 import org.futo.inputmethod.latin.uix.theme.presets.CatppuccinMocha
 import org.futo.inputmethod.latin.uix.theme.presets.ClassicMaterialDark
 import org.futo.inputmethod.latin.uix.theme.presets.ClassicMaterialLight
+import org.futo.inputmethod.latin.uix.theme.presets.CornerstoneAmber
 import org.futo.inputmethod.latin.uix.theme.presets.CornerstoneDark
 import org.futo.inputmethod.latin.uix.theme.presets.CottonCandy
 import org.futo.inputmethod.latin.uix.theme.presets.DeepSeaDark
@@ -39,6 +40,7 @@ data class ThemeOption(
 
 val ThemeOptions = mapOf(
     CornerstoneDark.key to CornerstoneDark,
+    CornerstoneAmber.key to CornerstoneAmber,
 
     DefaultDarkScheme.key to DefaultDarkScheme,
     DefaultLightScheme.key to DefaultLightScheme,

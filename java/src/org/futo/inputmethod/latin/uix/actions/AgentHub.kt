@@ -5,7 +5,9 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.util.Log
 import androidx.compose.foundation.background
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -29,10 +31,12 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TextField
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -50,6 +54,8 @@ import kotlinx.coroutines.yield
 import okhttp3.Request
 import org.json.JSONObject
 import org.futo.inputmethod.latin.BuildConfig
+import androidx.datastore.preferences.core.booleanPreferencesKey
+import org.futo.inputmethod.latin.uix.SettingsKey
 import org.futo.inputmethod.latin.uix.ANIMATE_BUBBLE
 import org.futo.inputmethod.latin.uix.AUDIO_FOCUS
 import org.futo.inputmethod.latin.uix.ActionWindow
@@ -78,9 +84,15 @@ import org.futo.voiceinput.shared.whisper.ModelManager
 import org.futo.voiceinput.shared.whisper.MultiModelRunConfiguration
 import java.util.Locale
 
-// Hub status endpoint: same prototype host as AGENT_ENDPOINT (Tailscale mesh,
+// Hub status endpoint: same prototype host as DEFAULT_AGENT_ENDPOINT (Tailscale mesh,
 // cleartext allowed for this host only), but needs no auth token.
 private const val AGENT_STATUS_ENDPOINT = "http://100.100.194.62:8877/agents"
+
+// One-time "what is this" card on first hub open.
+val HUB_ONBOARDED = SettingsKey(
+    key = booleanPreferencesKey("hub_onboarded"),
+    default = false
+)
 
 /** Live status of one agent as reported by the hub status endpoint. */
 internal data class AgentStatus(
@@ -152,6 +164,10 @@ internal object AgentMemory {
 
     private val exchanges = mutableMapOf<String, ArrayDeque<AgentExchange>>()
 
+    // Full text of each agent's most recent answer — the truncated summaries in
+    // `exchanges` orient the model, this is what "Copy last answer" hands out.
+    private val lastAnswers = mutableMapOf<String, String>()
+
     /** Store a successful exchange, evicting the oldest once past the bound. */
     @Synchronized
     fun record(agentId: String, label: String, userText: String, answer: String) {
@@ -164,7 +180,12 @@ internal object AgentMemory {
             )
         )
         while (queue.size > MAX_EXCHANGES) queue.removeFirst()
+        lastAnswers[agentId] = answer
     }
+
+    /** The agent's most recent full answer, or null when it hasn't answered yet. */
+    @Synchronized
+    fun lastAnswer(agentId: String): String? = lastAnswers[agentId]
 
     /** How many exchanges are remembered for this agent (0 when none). */
     @Synchronized
@@ -184,10 +205,11 @@ internal object AgentMemory {
     }
 }
 
-/** In-window navigation: tiles overview <-> one agent's detail view. */
+/** In-window navigation: tiles overview <-> one agent's detail view <-> add-agent form. */
 private sealed class HubScreen {
     object Tiles : HubScreen()
     data class Detail(val agentId: String) : HubScreen()
+    object AddAgent : HubScreen()
 }
 
 /** State machine for the detail view's request lifecycle. */
@@ -248,6 +270,13 @@ internal class AgentHubWindow(
     private var selectedAgent by mutableStateOf(context.getSetting(AGENT_KEY_AGENT))
     private var detailState by mutableStateOf<DetailState>(DetailState.Options)
 
+    // Wave 5 (Glamour): custom agents, one-time onboarding card, delete
+    // confirmation, and the flashlight toggle's on/off state.
+    private var customAgents by mutableStateOf(loadCustomAgents(context))
+    private var hubOnboarded by mutableStateOf(context.getSetting(HUB_ONBOARDED))
+    private var pendingDeleteAgent by mutableStateOf<CustomAgent?>(null)
+    private var torchOn by mutableStateOf(false)
+
     // ---- Dictation (Ask by voice) session state ----
     // Window-scoped, not remember{} state: the RecognizerViewListener callbacks
     // that drive it are not composables.
@@ -260,7 +289,12 @@ internal class AgentHubWindow(
     // modelManager plays for voice typing. Released in close().
     private val dictationModelManager = ModelManager(context)
 
-    private fun agentName(id: String): String = statuses?.get(id)?.name ?: agentDisplayName(id)
+    private fun agentName(id: String): String =
+        statuses?.get(id)?.name
+            ?: customAgents.firstOrNull { it.id == id }?.name
+            ?: agentDisplayName(id)
+
+    private fun customAgent(id: String): CustomAgent? = customAgents.firstOrNull { it.id == id }
 
     // Never read or send password field contents — same guard as the old tap behavior.
     private val isPasswordContext: Boolean
@@ -302,6 +336,7 @@ internal class AgentHubWindow(
                 )
 
                 is HubScreen.Detail -> AgentDetail(current.agentId)
+                HubScreen.AddAgent -> AddAgentForm()
             }
         }
     }
@@ -318,6 +353,15 @@ internal class AgentHubWindow(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 4.dp, bottom = 12.dp)
             )
+
+            if (!hubOnboarded) {
+                OnboardingCard(onDismiss = {
+                    context.setSettingBlocking(HUB_ONBOARDED.key, true)
+                    hubOnboarded = true
+                })
+                Spacer(modifier = Modifier.height(12.dp))
+            }
+
             AGENT_CHOICES.forEach { (id, fallbackName) ->
                 AgentTile(
                     agentId = id,
@@ -326,8 +370,152 @@ internal class AgentHubWindow(
                 )
                 Spacer(modifier = Modifier.height(8.dp))
             }
+
+            customAgents.forEach { agent ->
+                CustomAgentTile(
+                    agent = agent,
+                    onClick = { onSelect(agent.id) },
+                    onLongClick = { pendingDeleteAgent = agent }
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+            }
+
+            AddAgentTile(onClick = { screen = HubScreen.AddAgent })
+
+            pendingDeleteAgent?.let { agent ->
+                Spacer(modifier = Modifier.height(12.dp))
+                DeleteConfirmCard(agent)
+            }
         }
     }
+
+    /** One-time explainer. "Got it" persists HUB_ONBOARDED so it never returns. */
+    @Composable
+    private fun OnboardingCard(onDismiss: () -> Unit) {
+        Surface(shape = MaterialTheme.shapes.medium, tonalElevation = 4.dp) {
+            Column(modifier = Modifier.fillMaxWidth().padding(12.dp)) {
+                Text("Welcome to the Agent Hub", style = MaterialTheme.typography.titleSmall)
+                Text(
+                    "Each tile is an AI agent you can talk to from any text field. " +
+                        "Open one, then ask it about your draft, have it rewrite or " +
+                        "summarize, or dictate a question by voice. Add your own agent " +
+                        "with the + tile below.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 4.dp, bottom = 8.dp)
+                )
+                Row(modifier = Modifier.fillMaxWidth()) {
+                    Spacer(modifier = Modifier.weight(1f))
+                    TextButton(onClick = onDismiss) { Text("Got it") }
+                }
+            }
+        }
+    }
+
+    @Composable
+    private fun AddAgentTile(onClick: () -> Unit) {
+        Surface(
+            shape = MaterialTheme.shapes.medium,
+            tonalElevation = 0.dp,
+            modifier = Modifier.fillMaxWidth().clickable(onClick = onClick)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.padding(12.dp)
+            ) {
+                Text("＋", style = MaterialTheme.typography.titleMedium)
+                Spacer(modifier = Modifier.width(12.dp))
+                Column {
+                    Text("Add agent", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        "Your own agent: name, role, and system prompt.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+    }
+
+    /** Confirm card for a long-pressed custom tile. Built-in agents can't be deleted. */
+    @Composable
+    private fun DeleteConfirmCard(agent: CustomAgent) {
+        Surface(shape = MaterialTheme.shapes.medium, tonalElevation = 4.dp) {
+            Column(modifier = Modifier.fillMaxWidth().padding(12.dp)) {
+                Text("Delete ${agent.name}?", style = MaterialTheme.typography.titleSmall)
+                Text(
+                    "Its conversation memory goes with it. This can't be undone.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 4.dp, bottom = 8.dp)
+                )
+                Row(modifier = Modifier.fillMaxWidth()) {
+                    TextButton(onClick = { pendingDeleteAgent = null }) { Text("Cancel") }
+                    Spacer(modifier = Modifier.weight(1f))
+                    TextButton(onClick = { deleteCustomAgent(agent) }) {
+                        Text("Delete", color = MaterialTheme.colorScheme.error)
+                    }
+                }
+            }
+        }
+    }
+
+    private fun deleteCustomAgent(agent: CustomAgent) {
+        saveCustomAgents(context, customAgents.filterNot { it.id == agent.id })
+        customAgents = loadCustomAgents(context)
+        pendingDeleteAgent = null
+        // If the deleted agent was the selected one, fall back to the default so
+        // the quick-switcher and strip flows never point at a ghost id.
+        if (selectedAgent == agent.id) {
+            context.setSettingBlocking(AGENT_KEY_AGENT.key, AGENT_KEY_AGENT.default)
+            selectedAgent = AGENT_KEY_AGENT.default
+        }
+    }
+
+    @Composable
+    private fun CustomAgentTile(agent: CustomAgent, onClick: () -> Unit, onLongClick: () -> Unit) {
+        Surface(
+            shape = MaterialTheme.shapes.medium,
+            tonalElevation = 2.dp,
+            modifier = Modifier
+                .fillMaxWidth()
+                .agentTileClickable(onClick = onClick, onLongClick = onLongClick)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.padding(12.dp)
+            ) {
+                // Custom agents aren't on the hub roster, so their reachability is
+                // genuinely unknown — the neutral dot says so instead of guessing.
+                StatusDot(online = null, unknown = true)
+                Spacer(modifier = Modifier.width(12.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(agent.name, style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        listOfNotNull(
+                            agent.role.ifBlank { null },
+                            "custom"
+                        ).joinToString(" • "),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                if (agent.id == selectedAgent) {
+                    Text(
+                        "✓",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+            }
+        }
+    }
+
+    // Long-press-to-delete on tiles. Kept as a Modifier factory so the @OptIn
+    // for combinedClickable lives in exactly one place.
+    @OptIn(ExperimentalFoundationApi::class)
+    private fun Modifier.agentTileClickable(onClick: () -> Unit, onLongClick: () -> Unit): Modifier =
+        combinedClickable(onClick = onClick, onLongClick = onLongClick)
 
     @Composable
     private fun AgentTile(agentId: String, fallbackName: String, onClick: () -> Unit) {
@@ -374,6 +562,108 @@ internal class AgentHubWindow(
         else -> if (status.online) "Online" else "Offline"
     }
 
+    // ---- Add-agent form ----
+
+    /**
+     * In-hub form for defining a custom agent. Field state is remember{}-local
+     * (nothing outside the form needs it); validation errors render inline
+     * under the Save button.
+     */
+    @Composable
+    private fun AddAgentForm() {
+        var name by remember { mutableStateOf("") }
+        var role by remember { mutableStateOf("") }
+        var systemPrompt by remember { mutableStateOf("") }
+        var endpoint by remember { mutableStateOf("") }
+        var error by remember { mutableStateOf<String?>(null) }
+
+        Column(modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
+            TextButton(onClick = { screen = HubScreen.Tiles }) {
+                Text("← Back")
+            }
+            Text("Add agent", style = MaterialTheme.typography.titleLarge)
+            Spacer(modifier = Modifier.height(12.dp))
+
+            TextField(
+                value = name,
+                onValueChange = { name = it; error = null },
+                label = { Text("Name") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            TextField(
+                value = role,
+                onValueChange = { role = it },
+                label = { Text("Role (e.g. \"Coding helper\")") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            TextField(
+                value = systemPrompt,
+                onValueChange = { systemPrompt = it },
+                label = { Text("System prompt") },
+                placeholder = { Text("Instructions sent before every request") },
+                minLines = 3,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            TextField(
+                value = endpoint,
+                onValueChange = { endpoint = it },
+                label = { Text("Endpoint URL (optional)") },
+                placeholder = { Text("Default: the shared hub") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Text(
+                "Uses the same Bearer token as the built-in agents. Leave blank for " +
+                    "the shared hub. https recommended — cleartext http only reaches " +
+                    "hosts the keyboard's network config allows.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 4.dp, bottom = 12.dp)
+            )
+
+            error?.let {
+                Text(
+                    it,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.padding(bottom = 8.dp)
+                )
+            }
+
+            Row(modifier = Modifier.fillMaxWidth()) {
+                TextButton(onClick = { screen = HubScreen.Tiles }) { Text("Cancel") }
+                Spacer(modifier = Modifier.weight(1f))
+                Button(onClick = {
+                    val validation = validateNewAgent(name, customAgents)
+                    val id = validation.id
+                    if (id == null) {
+                        error = validation.error
+                    } else {
+                        saveCustomAgents(
+                            context,
+                            customAgents + CustomAgent(
+                                id = id,
+                                name = name.trim(),
+                                role = role.trim(),
+                                systemPrompt = systemPrompt.trim(),
+                                endpoint = endpoint.trim()
+                            )
+                        )
+                        customAgents = loadCustomAgents(context)
+                        screen = HubScreen.Tiles
+                    }
+                }) {
+                    Text("Save")
+                }
+            }
+        }
+    }
+
     // ---- Detail view ----
 
     // ColumnScope extension so the Answered branch can weight() its scroll box.
@@ -381,6 +671,7 @@ internal class AgentHubWindow(
     private fun ColumnScope.AgentDetail(agentId: String) {
         val name = agentName(agentId)
         val status = statuses?.get(agentId)
+        val custom = customAgent(agentId)
 
         TextButton(onClick = {
             teardownDictation()
@@ -391,12 +682,16 @@ internal class AgentHubWindow(
         }
 
         Row(verticalAlignment = Alignment.CenterVertically) {
-            StatusDot(online = status?.online, unknown = statusFetchFailed)
+            // Custom agents aren't on the hub roster — neutral dot, not a guess.
+            StatusDot(
+                online = status?.online,
+                unknown = statusFetchFailed || custom != null && status == null
+            )
             Spacer(modifier = Modifier.width(8.dp))
             Text(name, style = MaterialTheme.typography.titleLarge)
         }
         Text(
-            detailSubtitle(status),
+            detailSubtitle(agentId, status),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(top = 2.dp, bottom = 12.dp)
@@ -430,7 +725,16 @@ internal class AgentHubWindow(
         }
     }
 
-    private fun detailSubtitle(status: AgentStatus?): String {
+    private fun detailSubtitle(agentId: String, status: AgentStatus?): String {
+        val custom = customAgent(agentId)
+        if (custom != null) {
+            // No roster status for customs — describe the agent itself instead.
+            return listOfNotNull(
+                custom.role.ifBlank { null },
+                "custom agent",
+                if (custom.endpoint.isBlank()) null else "own endpoint"
+            ).joinToString(" • ")
+        }
         val statusText = when {
             statusFetchFailed -> "status unknown"
             status == null -> "checking status…"
@@ -482,6 +786,93 @@ internal class AgentHubWindow(
                     color = MaterialTheme.colorScheme.error
                 )
             }
+
+            DeviceActionsSection(agentId)
+        }
+    }
+
+    /**
+     * On-device helpers for the hub. Only what's cleanly possible from an IME
+     * without new permissions is wired; anything not wired says so instead of
+     * pretending (see HubDeviceActions.kt for the per-action honesty rules).
+     */
+    @Composable
+    private fun DeviceActionsSection(agentId: String) {
+        val scope = rememberCoroutineScope()
+        val lastAnswer = AgentMemory.lastAnswer(agentId)
+
+        Spacer(modifier = Modifier.height(16.dp))
+        Text("Device actions", style = MaterialTheme.typography.titleSmall)
+        Text(
+            "Helpers that run on this phone. No new permissions.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 2.dp, bottom = 8.dp)
+        )
+
+        OutlinedButton(
+            onClick = {
+                if (!openAlarmSetter(context)) manager.announce("No clock app on this device")
+            },
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text("⏰ Set alarm")
+        }
+        Spacer(modifier = Modifier.height(8.dp))
+
+        OutlinedButton(
+            onClick = {
+                if (setTorch(context, !torchOn)) {
+                    torchOn = !torchOn
+                    manager.announce(if (torchOn) "Flashlight on" else "Flashlight off")
+                } else {
+                    manager.announce("Flashlight unavailable on this device")
+                }
+            },
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text(if (torchOn) "🔦 Flashlight (on)" else "🔦 Flashlight")
+        }
+        Spacer(modifier = Modifier.height(8.dp))
+
+        OutlinedButton(
+            onClick = { lastAnswer?.let { copyAnswer(it) } },
+            enabled = lastAnswer != null,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text("📋 Copy last answer")
+        }
+        if (lastAnswer == null) {
+            Text(
+                "Nothing to copy yet — ask ${agentName(agentId)} something first.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 2.dp, bottom = 8.dp)
+            )
+        } else {
+            Spacer(modifier = Modifier.height(8.dp))
+        }
+
+        // Stub: the hub has no find-my-phone endpoint today, so a failure is
+        // reported as "not wired yet", never as success.
+        OutlinedButton(
+            onClick = {
+                scope.launch(Dispatchers.IO) {
+                    val wired = requestFindMyPhone(agentToken())
+                    withContext(Dispatchers.Main) {
+                        if (wired) {
+                            manager.announce("Find-my-phone request sent")
+                        } else {
+                            detailState = DetailState.Hint(
+                                "Find my phone isn't wired yet — the hub has no endpoint for it."
+                            )
+                        }
+                    }
+                }
+            },
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text("📱 Find my phone (not wired yet)")
         }
     }
 
@@ -669,10 +1060,16 @@ internal class AgentHubWindow(
         detailState = DetailState.Thinking
         manager.getLifecycleScope().launch(Dispatchers.IO) {
             // The composed prompt IS the text — postToAgent takes the full string.
-            // Memory goes first so the agent sees its own prior answers before
-            // the new request.
+            // A custom agent's system prompt goes first (it's the standing
+            // instruction), then memory so the agent sees its own prior answers
+            // before the new request.
+            val custom = customAgent(request.agentId)
             val memoryContext = AgentMemory.contextBlock(request.agentId)
             val prompt = buildString {
+                if (custom != null && custom.systemPrompt.isNotBlank()) {
+                    append(custom.systemPrompt)
+                    append("\n\n")
+                }
                 if (memoryContext != null) {
                     append(memoryContext)
                     append("\n\n")
@@ -680,7 +1077,8 @@ internal class AgentHubWindow(
                 append(request.promptPrefix)
                 append(request.userText)
             }
-            val answer = postToAgent(prompt, token, request.agentId)
+            val endpoint = custom?.endpoint?.takeIf { it.isNotBlank() } ?: DEFAULT_AGENT_ENDPOINT
+            val answer = postToAgent(prompt, token, request.agentId, endpoint)
             Log.i("AgentHub", "answer from ${request.agentId}: len=${answer?.length} head=${answer?.take(60)}")
             withContext(Dispatchers.Main) {
                 detailState = if (answer != null) {
@@ -880,6 +1278,12 @@ internal class AgentHubWindow(
 
     override fun close(): CloseResult {
         teardownDictation()
+        // Never leave the flashlight burning after the keyboard goes away —
+        // the hub owns the toggle, so it owns the cleanup.
+        if (torchOn) {
+            setTorch(context, false)
+            torchOn = false
+        }
         runBlocking { dictationModelManager.cleanUp() }
         return CloseResult.Default
     }
