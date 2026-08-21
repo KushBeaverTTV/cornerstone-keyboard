@@ -64,6 +64,13 @@ interface KeyboardManagerForAction {
     fun appSupportsImageInsertion(schema: String, ignoreConnectionOverride: Boolean): Boolean
     fun backspace(amount: Int)
 
+    /**
+     * Triggers the current field's IME action (send/go/search) if it declares one,
+     * otherwise falls back to a plain Enter keypress. Returns false if there is no
+     * active input connection at all.
+     */
+    fun performEditorAction(): Boolean
+
     fun closeActionWindow()
     fun forceActionWindowAboveKeyboard(to: Boolean)
 

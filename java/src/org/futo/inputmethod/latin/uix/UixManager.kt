@@ -382,6 +382,25 @@ class UixActionKeyboardManager(val uixManager: UixManager, val latinIME: LatinIM
         }
     }
 
+    override fun performEditorAction(): Boolean {
+        val editorInfo = latinIME.currentInputEditorInfo ?: return false
+        val inputConnection = latinIME.currentInputConnection ?: return false
+
+        val action = editorInfo.imeOptions and EditorInfo.IME_MASK_ACTION
+        return if (action != EditorInfo.IME_ACTION_NONE) {
+            // The field declares a send/go/search/etc. action — trigger it for real.
+            inputConnection.performEditorAction(action)
+        } else {
+            // No action declared: Enter keypress (newline) is the honest fallback.
+            latinIME.latinIMELegacy.onCodeInput(
+                Constants.CODE_ENTER,
+                Constants.NOT_A_COORDINATE,
+                Constants.NOT_A_COORDINATE, false
+            )
+            true
+        }
+    }
+
     override fun closeActionWindow() {
         uixManager.closeActionWindow()
     }

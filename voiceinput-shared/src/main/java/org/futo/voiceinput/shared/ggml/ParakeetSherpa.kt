@@ -37,6 +37,20 @@ class InvalidParakeetModelException(message: String) :
     Exception("The Parakeet model could not be loaded: $message")
 
 /**
+ * Engine-level configuration for a Parakeet model, supplied by the loader
+ * (ModelParakeetAsset) rather than hardcoded here — v2 and v3 differ in token
+ * sets and may differ in these parameters, and this class must not guess.
+ *
+ * The defaults are the Parakeet TDT 0.6B v2/v3 (sherpa-onnx, int8) values.
+ */
+data class ParakeetEngineConfig(
+    val sampleRate: Int = 16000,
+    val featureDim: Int = 80,
+    val modelType: String = "nemo_transducer",
+    val numThreads: Int = 4
+)
+
+/**
  * Parakeet TDT (NeMo transducer) inference via sherpa-onnx OfflineRecognizer.
  *
  * @param modelDir directory on the real filesystem containing the model files
@@ -44,10 +58,14 @@ class InvalidParakeetModelException(message: String) :
  *                 CRITICAL: must be a real file path (filesDir), NOT an asset path -
  *                 OfflineRecognizer is constructed with assetManager = null because
  *                 passing a non-null AssetManager with absolute paths fails.
+ * @param engineConfig sample rate / feature dim / model type / thread count,
+ *                     provided by the loader that owns the model directory.
  *
  * Notes:
- *  - Offline engine: no true partial results. A single partialResult is emitted at
- *    the end of a successful decode; the UI tolerates this.
+ *  - Offline engine: partial results are produced by re-decoding the accumulated
+ *    audio buffer from scratch (inferPartial) — sherpa's OfflineRecognizer has no
+ *    incremental decode. A single partialResult is also emitted at the end of a
+ *    successful final decode.
  *  - No native mid-decode cancel: cancel() sets a flag and the result is discarded
  *    after decode returns (InferenceCancelledException). Lag is bounded by decode
  *    time of the buffered audio.
@@ -56,20 +74,30 @@ class InvalidParakeetModelException(message: String) :
  */
 class ParakeetSherpa(
     modelDir: String,
-    private val numThreads: Int = 4
+    private val engineConfig: ParakeetEngineConfig = ParakeetEngineConfig()
 ) : SpeechEngine {
-
-    companion object {
-        const val SAMPLE_RATE = 16000
-    }
 
     private val recognizer: OfflineRecognizer
 
     @Volatile
     private var cancelled: Boolean = false
 
+    // Incremented on every cancel(); a partial decode captures it at entry and
+    // discards its result if it changed mid-flight. Unlike [cancelled] (which
+    // infer() resets per final decode), this survives session boundaries, so a
+    // stale partial from a cancelled recording can never deliver text into the
+    // next session.
+    @Volatile
+    private var cancelGeneration: Int = 0
+
     @Volatile
     private var closed: Boolean = false
+
+    // Try-gate for partial decodes. All decode work serializes on inferenceContext
+    // (single thread), so this gate's job is NOT mutual exclusion — it is to skip
+    // a scheduled partial when one is already running/queued, so a slow decode
+    // never lets partial requests pile up behind it.
+    private val partialDecodeBusy = java.util.concurrent.atomic.AtomicBoolean(false)
 
     init {
         val dir = File(modelDir)
@@ -85,8 +113,8 @@ class ParakeetSherpa(
 
         val config = OfflineRecognizerConfig(
             featConfig = FeatureConfig(
-                sampleRate = SAMPLE_RATE,
-                featureDim = 80
+                sampleRate = engineConfig.sampleRate,
+                featureDim = engineConfig.featureDim
             ),
             modelConfig = OfflineModelConfig(
                 transducer = OfflineTransducerModelConfig(
@@ -95,10 +123,10 @@ class ParakeetSherpa(
                     joiner = joiner.absolutePath
                 ),
                 tokens = tokens.absolutePath,
-                numThreads = numThreads,
+                numThreads = engineConfig.numThreads,
                 debug = false,
                 provider = "cpu",
-                modelType = "nemo_transducer"
+                modelType = engineConfig.modelType
             ),
             decodingMethod = "greedy_search"
         )
@@ -129,7 +157,8 @@ class ParakeetSherpa(
     }
 
     // prompt, languages, bailLanguages, decodingMode and suppressNonSpeechTokens are
-    // whisper-specific and intentionally ignored. Parakeet TDT 0.6B v2 is English-only.
+    // whisper-specific and intentionally ignored. Parakeet TDT 0.6B v2 is English-only
+    // (v3 multilingual is routed by the loader, not by these parameters).
     @Throws(InferenceCancelledException::class)
     override suspend fun infer(
         samples: FloatArray,
@@ -148,7 +177,7 @@ class ParakeetSherpa(
 
         val stream = recognizer.createStream()
         try {
-            stream.acceptWaveform(samples, SAMPLE_RATE)
+            stream.acceptWaveform(samples, engineConfig.sampleRate)
             recognizer.decode(stream)
 
             if (cancelled) throw InferenceCancelledException()
@@ -167,9 +196,67 @@ class ParakeetSherpa(
         }
     }
 
+    /**
+     * Streaming-partial decode: re-decodes the audio accumulated so far and pushes
+     * the transcript through [partialResultCallback], so text appears while the
+     * user is still speaking.
+     *
+     * sherpa-onnx's OfflineRecognizer has no incremental decode, so each partial
+     * is a full createStream/acceptWaveform/decode/getResult/release cycle over
+     * the buffer snapshot — O(audio length) per tick, called at most every
+     * ~800ms by AudioRecognizer and skipped entirely while a previous partial is
+     * still running (try-gate), so partial work can never pile up on the
+     * inference thread.
+     *
+     * Cancel-safety: if cancel() was called after this decode started, the result
+     * is silently discarded (cancelGeneration changed). No callback, no text.
+     *
+     * Leak-safety: every created stream is released in finally.
+     *
+     * @return true if a decode actually ran, false if skipped (busy/closed/empty).
+     */
+    suspend fun inferPartial(
+        samples: FloatArray,
+        partialResultCallback: (String) -> Unit
+    ): Boolean = withContext(inferenceContext) {
+        // All checks run ON the inference thread: close() also runs there, so a
+        // closed recognizer can never be touched by a queued partial.
+        if (closed || samples.isEmpty()) return@withContext false
+        if (!partialDecodeBusy.compareAndSet(false, true)) return@withContext false
+
+        val generationAtEntry = cancelGeneration
+        try {
+            val stream = recognizer.createStream()
+            try {
+                stream.acceptWaveform(samples, engineConfig.sampleRate)
+                recognizer.decode(stream)
+
+                if (cancelGeneration != generationAtEntry) return@withContext false
+
+                val result = recognizer.getResult(stream).text.trim()
+
+                if (cancelGeneration != generationAtEntry) return@withContext false
+
+                if (result.isNotEmpty()) {
+                    partialResultCallback(result)
+                }
+
+                return@withContext true
+            } finally {
+                stream.release()
+            }
+        } finally {
+            // The gate is released even if createStream() throws — a stuck gate
+            // would disable partials for the lifetime of this cached engine.
+            partialDecodeBusy.set(false)
+        }
+    }
+
     override fun cancel() {
-        // No native cancel for offline decode; the result is discarded on return.
+        // No native cancel for offline decode; results are discarded on return.
+        // Bumping the generation also invalidates any in-flight partial decode.
         cancelled = true
+        cancelGeneration++
     }
 
     override suspend fun close() = withContext(inferenceContext) {

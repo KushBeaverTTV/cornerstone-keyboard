@@ -2,6 +2,7 @@ package org.futo.voiceinput.shared.types
 
 import android.content.Context
 import androidx.annotation.StringRes
+import org.futo.voiceinput.shared.ggml.ParakeetEngineConfig
 import org.futo.voiceinput.shared.ggml.ParakeetSherpa
 import org.futo.voiceinput.shared.ggml.SpeechEngine
 import org.futo.voiceinput.shared.ggml.WhisperGGML
@@ -150,7 +151,8 @@ public class ModelFileFile(
  */
 internal class ModelParakeetAsset(
     override val name: Int,
-    val assetDir: String
+    val assetDir: String,
+    private val engineConfig: ParakeetEngineConfig = ParakeetEngineConfig()
 ) : ModelLoader {
     private fun targetDir(context: Context) = File(context.filesDir, "models/$assetDir")
     private fun completeMarker(context: Context) = File(targetDir(context), ".complete")
@@ -197,7 +199,7 @@ internal class ModelParakeetAsset(
             throw IOException("Parakeet model directory missing: ${dir.absolutePath} - sideload the model files there")
         }
 
-        return ParakeetSherpa(dir.absolutePath)
+        return ParakeetSherpa(dir.absolutePath, engineConfig)
     }
 
     @Throws(IOException::class)

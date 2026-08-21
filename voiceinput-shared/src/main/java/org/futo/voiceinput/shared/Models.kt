@@ -19,6 +19,27 @@ val BUILTIN_PARAKEET_MODEL: ModelLoader = ModelParakeetAsset(
     assetDir = "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8"
 )
 
+// Parakeet TDT 0.6B v3 (int8, multilingual) via sherpa-onnx. Same tmp->verify->
+// rename->.complete seed discipline as v2 (ModelParakeetAsset is shared); only the
+// model directory — and with it the ModelManager cache key ("Parakeet$assetDir") —
+// differs, so v2 and v3 coexist on disk and in memory.
+// NOTE: v3 keeps the v2 engine parameters (16kHz, 80-dim feats, nemo_transducer);
+// if a future model changes them, pass a ParakeetEngineConfig here and the engine
+// follows the loader. Delivery UI (downloader/fallback routing) is NOT wired to v3
+// yet — selection happens wherever this loader is explicitly chosen.
+val BUILTIN_PARAKEET_V3_MODEL: ModelLoader = ModelParakeetAsset(
+    name = R.string.parakeet_v3_name,
+    assetDir = "sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8"
+)
+
+/**
+ * Whether final transcripts from this model should go through voice-command
+ * post-processing ("new line", "delete that", "send it"). Parakeet path only —
+ * whisper models keep raw transcript behavior.
+ */
+fun ModelLoader.supportsVoiceCommands(): Boolean =
+    this === BUILTIN_PARAKEET_MODEL || this === BUILTIN_PARAKEET_V3_MODEL
+
 val ENGLISH_MODELS: List<ModelLoader> = listOf(
     ModelBuiltInAsset(
         name = R.string.tiny_en_name,

@@ -31,6 +31,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.yield
 import org.futo.voiceinput.shared.ggml.InferenceCancelledException
 import org.futo.voiceinput.shared.ggml.InvalidModelException
+import org.futo.voiceinput.shared.ggml.ParakeetSherpa
 import org.futo.voiceinput.shared.types.AudioRecognizerListener
 import org.futo.voiceinput.shared.types.InferenceState
 import org.futo.voiceinput.shared.types.Language
@@ -95,7 +96,7 @@ class ModelDoesNotExistException(val models: List<ModelLoader>) : Throwable()
 class AudioRecognizer(
     private val context: Context,
     private val lifecycleScope: LifecycleCoroutineScope,
-    modelManager: ModelManager,
+    private val modelManager: ModelManager,
     private val listener: AudioRecognizerListener,
     private val settings: AudioRecognizerSettings
 ) {
@@ -111,6 +112,23 @@ class AudioRecognizer(
     private var recorderJob: Job? = null
     private var modelJob: Job? = null
     private var loadModelJob: Job? = null
+    private var partialDecodeJob: Job? = null
+
+    // Streaming partial transcripts (Parakeet path only): while recording, the
+    // accumulated audio is re-decoded every PARTIAL_DECODE_INTERVAL_MS on the
+    // inference thread and pushed through the normal partialResult callback.
+    private var lastPartialDecodeAtMs = 0L
+
+    // A failing partial decode must never crash or degrade the final decode —
+    // one failure disables partials for the rest of this recording session.
+    private var partialDecodesDisabled = false
+
+    companion object {
+        private const val PARTIAL_DECODE_INTERVAL_MS = 800L
+        // Don't burn a decode on the first instant of audio — sub-second decodes
+        // only produce noise.
+        private const val PARTIAL_DECODE_MIN_SAMPLES = 16000 // 1s at 16kHz
+    }
 
     private var focusRequest: AudioFocusRequest? = null
 
@@ -223,6 +241,7 @@ class AudioRecognizer(
         recorder = null
 
         modelJob?.cancel()
+        partialDecodeJob?.cancel()
         isRecording = false
 
         modelRunner.cancelAll()
@@ -416,6 +435,8 @@ class AudioRecognizer(
                 listener.updateMagnitude(magnitude, state)
             }
 
+            maybeLaunchPartialDecode()
+
             // Skip ahead as much as possible, in case we are behind (taking more than
             // 100ms to process 100ms)
             while (true) {
@@ -444,6 +465,57 @@ class AudioRecognizer(
         return Vad.builder().setModel(Model.WEB_RTC_GMM).setMode(Mode.VERY_AGGRESSIVE)
             .setFrameSize(FrameSize.FRAME_SIZE_480).setSampleRate(SampleRate.SAMPLE_RATE_16K)
             .setSpeechDurationMs(150).setSilenceDurationMs(300).build()
+    }
+
+    /**
+     * Streaming partial transcripts (Parakeet path only; the whisper engine and its
+     * native partials stay untouched).
+     *
+     * Called once per recording-loop iteration (~100ms); throttles itself to one
+     * launch per PARTIAL_DECODE_INTERVAL_MS. This function runs ON THE RECORDER
+     * THREAD and must stay cheap and non-blocking: it only snapshots the sample
+     * buffer (an array copy) and launches a coroutine. The decode itself runs on
+     * the engine's single inference thread, which self-gates (skips when busy),
+     * so a slow decode can never queue up work here.
+     *
+     * Cancel-safety: reset()/cancel() cancel [partialDecodeJob] and bump the
+     * engine's cancel generation, so an in-flight partial can never deliver text
+     * after cancellation. Leak-safety: each partial decode releases its sherpa
+     * stream internally (see ParakeetSherpa.inferPartial).
+     */
+    private fun maybeLaunchPartialDecode() {
+        if (partialDecodesDisabled) return
+
+        val now = System.currentTimeMillis()
+        if (now - lastPartialDecodeAtMs < PARTIAL_DECODE_INTERVAL_MS) return
+
+        // Only decode once model preloading has settled; peek without loading so a
+        // slow model load never blocks the recorder.
+        if (loadModelJob?.isCompleted != true) return
+        val engine = modelManager.peekLoadedEngine(settings.modelRunConfiguration.primaryModel)
+                as? ParakeetSherpa ?: return
+
+        val sampleCount = floatSamples.position()
+        if (sampleCount < PARTIAL_DECODE_MIN_SAMPLES) return
+
+        lastPartialDecodeAtMs = now
+
+        // Snapshot: floatSamples is only mutated on this thread, so the position
+        // read and the copy are race-free here.
+        val snapshot = floatSamples.array().sliceArray(0 until sampleCount)
+
+        partialDecodeJob = lifecycleScope.launch(Dispatchers.Default) {
+            try {
+                engine.inferPartial(snapshot) { text ->
+                    runnerCallback.partialResult(text)
+                }
+            } catch (e: Exception) {
+                // A partial is best-effort: log it, stop scheduling more, and let
+                // the final decode path surface any real model problem.
+                Log.w("AudioRecognizer", "Partial decode failed, disabling partials for this session", e)
+                partialDecodesDisabled = true
+            }
+        }
     }
 
     @Throws(SecurityException::class)
@@ -498,6 +570,11 @@ class AudioRecognizer(
     }
 
     private fun startRecording() {
+        // New session: re-enable streaming partials (a previous session may have
+        // disabled them after a partial-decode failure).
+        partialDecodesDisabled = false
+        lastPartialDecodeAtMs = 0L
+
         val device = try {
             createRecorderAndJob(settings.recordingConfiguration.preferBluetoothMic)
         } catch (e: SecurityException) {

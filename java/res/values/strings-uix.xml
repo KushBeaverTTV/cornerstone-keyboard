@@ -46,6 +46,9 @@
 
     <!-- For voice input action -->
     <string name="action_voice_input_title">Voice Input</string>
+    <string name="action_voice_deleted_last_sentence">Deleted last sentence</string>
+    <string name="action_voice_nothing_to_delete">Nothing to delete</string>
+    <string name="action_voice_sent">Sent</string>
     <!-- Same as the one above but it uses the device's default system voice input instead of the built-in -->
     <string name="action_system_voice_input_title">Voice Input (System)</string>
     <string name="action_voice_input_no_model_for_language_x_installed">No voice input model installed for <xliff:g name="language" example="español">%s</xliff:g>, tap to check options?</string>

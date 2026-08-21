@@ -54,8 +54,11 @@ import org.futo.voiceinput.shared.RecognizerViewListener
 import org.futo.voiceinput.shared.RecognizerViewSettings
 import org.futo.voiceinput.shared.RecordingSettings
 import org.futo.voiceinput.shared.SoundPlayer
+import org.futo.voiceinput.shared.supportsVoiceCommands
 import org.futo.voiceinput.shared.types.Language
 import org.futo.voiceinput.shared.types.ModelLoader
+import org.futo.voiceinput.shared.types.ProcessedVoiceResult
+import org.futo.voiceinput.shared.types.VoiceCommandProcessor
 import org.futo.voiceinput.shared.types.getLanguageFromWhisperString
 import org.futo.voiceinput.shared.ui.MicrophoneDeviceState
 import org.futo.voiceinput.shared.whisper.DecodingConfiguration
@@ -103,6 +106,11 @@ class VoiceInputPersistentState(val manager: KeyboardManagerForAction) : Persist
     val modelManager = ModelManager(manager.getContext())
     val soundPlayer = SoundPlayer(manager.getContext())
     val userDictionaryObserver = UserDictionaryObserver(manager.getContext())
+
+    // The exact string the last voice-input session committed into the field.
+    // Powers the "delete that" voice command: it survives across windows because
+    // this state outlives any single dictation session.
+    var lastCommittedVoiceText: String? = null
 
     override suspend fun cleanUp() {
         modelManager.cleanUp()
@@ -167,6 +175,10 @@ private class VoiceInputActionWindow(
 
     private var recognizerView: MutableState<RecognizerView?> = mutableStateOf(null)
     private var modelException: MutableState<ModelDoesNotExistException?> = mutableStateOf(null)
+
+    // Voice commands ("new line", "delete that", "send it") apply to the Parakeet
+    // path only; whisper transcripts are committed verbatim.
+    private val voiceCommandsEnabled = model.supportsVoiceCommands()
 
     private val initJob = manager.getLifecycleScope().launch(Dispatchers.Default) {
         yield()
@@ -268,10 +280,105 @@ private class VoiceInputActionWindow(
         wasFinished = true
 
         manager.getLifecycleScope().launch(Dispatchers.Main) {
-            val sanitized = ModelOutputSanitizer.sanitize(result, inputTransaction.textContext)
-            inputTransaction.commit(sanitized)
-            manager.announce(result)
-            manager.closeActionWindow()
+            // Voice commands are post-processed on the Parakeet path only; any
+            // other engine's transcript is committed verbatim.
+            if (voiceCommandsEnabled) {
+                when (val processed = VoiceCommandProcessor.process(result)) {
+                    is ProcessedVoiceResult.InsertText -> commitTranscript(processed.text, result)
+                    ProcessedVoiceResult.DeleteLastSentence -> handleDeleteLastSentence()
+                    ProcessedVoiceResult.PerformImeAction -> handlePerformImeAction()
+                }
+            } else {
+                commitTranscript(result, result)
+            }
+        }
+    }
+
+    private fun commitTranscript(commandProcessed: String, announceText: String) {
+        val sanitized = ModelOutputSanitizer.sanitize(commandProcessed, inputTransaction.textContext)
+        inputTransaction.commit(sanitized)
+        if (sanitized.isNotBlank()) {
+            state.lastCommittedVoiceText = sanitized
+        }
+        manager.announce(announceText)
+        manager.closeActionWindow()
+    }
+
+    /**
+     * Discards the composing partial (the command phrase itself — "delete that"
+     * must not become text) and ends the input transaction, so subsequent
+     * backspace/editor-action calls route through the normal IME again.
+     * cancel() commits the current partial, so the partial is cleared FIRST.
+     */
+    private fun discardCommandPartialAndEndTransaction() {
+        inputTransaction.updatePartial("")
+        inputTransaction.cancel()
+    }
+
+    private fun handleDeleteLastSentence() {
+        val beforeCursor = inputTransaction.textContext.beforeCursor?.toString().orEmpty()
+        val charsToDelete = deletionLength(beforeCursor, state.lastCommittedVoiceText)
+
+        discardCommandPartialAndEndTransaction()
+
+        if (charsToDelete > 0) {
+            manager.backspace(charsToDelete)
+            manager.announce(context.getString(R.string.action_voice_deleted_last_sentence))
+        } else {
+            manager.announce(context.getString(R.string.action_voice_nothing_to_delete))
+        }
+        state.lastCommittedVoiceText = null
+        manager.closeActionWindow()
+    }
+
+    private fun handlePerformImeAction() {
+        discardCommandPartialAndEndTransaction()
+
+        if (manager.performEditorAction()) {
+            manager.announce(context.getString(R.string.action_voice_sent))
+        }
+        // A sent field usually dismisses itself; still close our window cleanly.
+        manager.closeActionWindow()
+    }
+
+    companion object {
+        private val SENTENCE_TERMINATORS = setOf('.', '!', '?', '\n')
+
+        /**
+         * How many characters "delete that" removes.
+         *
+         * Primary path: the exact string this session previously committed is still
+         * at the cursor — delete precisely it. Fallback: the user typed on since
+         * then, so delete the trailing sentence instead (bounded to the last word
+         * when no sentence boundary exists, so a runaway delete is impossible).
+         */
+        fun deletionLength(beforeCursor: String, lastCommitted: String?): Int {
+            if (!lastCommitted.isNullOrEmpty() && beforeCursor.endsWith(lastCommitted)) {
+                return lastCommitted.length
+            }
+            return trailingSentenceLength(beforeCursor)
+        }
+
+        fun trailingSentenceLength(text: String): Int {
+            if (text.isEmpty()) return 0
+
+            // Trailing whitespace belongs to the sentence before it:
+            // "Hello. Next. " deletes "Next. " (with its trailing space).
+            var i = text.length - 1
+            while (i >= 0 && text[i].isWhitespace()) i--
+            if (i < 0) return text.length // field is whitespace-only before cursor
+
+            // Consume the trailing sentence's OWN terminator(s) first, otherwise
+            // the boundary scan below would stop at it and delete only that.
+            while (i >= 0 && text[i] in SENTENCE_TERMINATORS) i--
+            if (i < 0) return text.length // text is punctuation-only (e.g. "...")
+
+            while (i >= 0 && text[i] !in SENTENCE_TERMINATORS) i--
+            if (i >= 0) return text.length - (i + 1)
+
+            // No sentence boundary anywhere: bound the damage to the last word.
+            val lastSpace = text.indexOfLast { it.isWhitespace() }
+            return if (lastSpace >= 0) text.length - (lastSpace + 1) else 0
         }
     }
 
