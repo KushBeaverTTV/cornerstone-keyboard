@@ -21,7 +21,7 @@ import java.util.concurrent.atomic.AtomicBoolean
  * (filesDir/models/...) means there is no sideload path for a normal user install —
  * so the app downloads the model itself, over the Tailscale mesh, from the VPS:
  *
- *   http://100.100.194.62:8890/models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8/<file>
+ *   $MODEL_MIRROR_URL/models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8/<file>  (build-time injected)
  *
  * (Cleartext HTTP to that host only is permitted via network_security_config.xml;
  * the mesh itself is encrypted.)
@@ -42,7 +42,10 @@ object ParakeetModelDownloader {
     private const val TAG = "ParakeetModelDl"
 
     const val MODEL_DIR_NAME = "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8"
-    private const val BASE_URL = "http://100.100.194.62:8890/models/$MODEL_DIR_NAME"
+    // KBP delivery mirror, injected at build time from local.properties
+    // (MODEL_MIRROR_URL). Empty default = only bundled/HF sources work.
+    private val BASE_URL =
+        "${org.futo.voiceinput.shared.BuildConfig.MODEL_MIRROR_URL}/models/$MODEL_DIR_NAME"
 
     private const val CHANNEL_ID = "parakeet_model_download"
     private const val PROGRESS_NOTIFICATION_ID = 7101

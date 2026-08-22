@@ -5,6 +5,6 @@
 <network-security-config>
     <base-config cleartextTrafficPermitted="false" />
     <domain-config cleartextTrafficPermitted="true">
-        <domain includeSubdomains="false">100.100.194.62</domain>
+        <domain includeSubdomains="false">tailscale-mesh-host.local</domain>
     </domain-config>
 </network-security-config>

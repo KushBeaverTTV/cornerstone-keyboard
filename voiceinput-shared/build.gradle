@@ -70,6 +70,17 @@ final def translationsWithoutEngValues = { final String path ->
 }
 
 android {
+    buildFeatures {
+        buildConfig true
+    }
+    defaultConfig {
+        // KBP: model delivery mirror injected from root local.properties.
+        final def lp = new Properties()
+        def lpf = rootProject.file("local.properties")
+        if (lpf.exists()) lp.load(new FileInputStream(lpf))
+        buildConfigField "String", "MODEL_MIRROR_URL", "\"${lp.getProperty('MODEL_MIRROR_URL', '')}\""
+    }
+
     namespace 'org.futo.voiceinput.shared'
     compileSdk 35
 

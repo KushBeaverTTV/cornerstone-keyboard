@@ -104,7 +104,7 @@ import java.util.Locale
 
 // Hub status endpoint: same prototype host as DEFAULT_AGENT_ENDPOINT (Tailscale mesh,
 // cleartext allowed for this host only), but needs no auth token.
-private const val AGENT_STATUS_ENDPOINT = "http://100.100.194.62:8877/agents"
+private val AGENT_STATUS_ENDPOINT = "${BuildConfig.AGENT_KEY_ENDPOINT.removeSuffix("/agentkey")}/agents"
 
 // One-time "what is this" card on first hub open.
 val HUB_ONBOARDED = SettingsKey(

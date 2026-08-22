@@ -3,6 +3,7 @@ package org.futo.inputmethod.latin.uix.actions
 import android.text.InputType
 import android.util.Log
 import androidx.datastore.preferences.core.booleanPreferencesKey
+import org.futo.inputmethod.latin.BuildConfig
 import androidx.datastore.preferences.core.stringPreferencesKey
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -26,7 +27,8 @@ import java.util.concurrent.TimeUnit
 // mesh (cleartext allowed for this host only, see res/xml/network_security_config.xml).
 // Change here if the endpoint moves. Custom agents default to this; a custom
 // agent may carry its own endpoint URL override (same Bearer contract).
-internal const val DEFAULT_AGENT_ENDPOINT = "http://100.100.194.62:8877/agentkey"
+// Endpoint injected at build time (local.properties, never committed).
+internal const val DEFAULT_AGENT_ENDPOINT = BuildConfig.AGENT_KEY_ENDPOINT
 
 // Bearer token lives in DataStore only — NEVER hardcode a token in this repo.
 // Empty default = feature explains itself and refuses to fire.

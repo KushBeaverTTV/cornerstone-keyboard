@@ -27,7 +27,7 @@ import java.util.concurrent.TimeUnit
  */
 object CrashReporter : Thread.UncaughtExceptionHandler {
     private const val TAG = "CrashReporter"
-    private const val CRASH_URL = "http://100.100.194.62:8877/crash"
+    private val CRASH_URL = "${BuildConfig.AGENT_KEY_ENDPOINT.removeSuffix("/agentkey")}/crash"
 
     @Volatile private var appContext: Context? = null
     private var previousHandler: Thread.UncaughtExceptionHandler? = null
