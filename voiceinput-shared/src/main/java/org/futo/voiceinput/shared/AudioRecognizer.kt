@@ -123,9 +123,6 @@ class AudioRecognizer(
     // one failure disables partials for the rest of this recording session.
     private var partialDecodesDisabled = false
 
-    // KBP: master switch for streaming partials (see maybeLaunchPartialDecode).
-    private val enableStreamingPartials = false
-
     companion object {
         private const val PARTIAL_DECODE_INTERVAL_MS = 800L
         // Don't burn a decode on the first instant of audio — sub-second decodes
@@ -410,7 +407,7 @@ class AudioRecognizer(
 
             val rms = sqrt(samples.sumOf { (it.toFloat() / Short.MAX_VALUE.toFloat()).pow(2).toDouble() } / samples.size).toFloat()
 
-            if (startSoundPassed && ((rms > 0.01) || (numConsecutiveSpeech > 8))) {
+            if (startSoundPassed && ((rms > 0.004) || (numConsecutiveSpeech > 8))) {
                 hasTalked = true
             }
 
@@ -467,7 +464,9 @@ class AudioRecognizer(
     }
 
     private fun createVad(): VadModel {
-        return Vad.builder().setModel(Model.WEB_RTC_GMM).setMode(Mode.VERY_AGGRESSIVE)
+        return Vad.builder()// KBP: VERY_AGGRESSIVE only registered near-field audio — users had to
+        // practically swallow the phone. NORMAL hears speech at hand distance.
+        .setModel(Model.WEB_RTC_GMM).setMode(Mode.NORMAL)
             .setFrameSize(FrameSize.FRAME_SIZE_480).setSampleRate(SampleRate.SAMPLE_RATE_16K)
             .setSpeechDurationMs(150).setSilenceDurationMs(300).build()
     }
@@ -489,14 +488,15 @@ class AudioRecognizer(
      * stream internally (see ParakeetSherpa.inferPartial).
      */
     private fun maybeLaunchPartialDecode() {
-        // KBP: streaming partials re-decode the ENTIRE buffer from scratch every
-        // interval, so cost grows with message length and long dictations lag.
-        // Off by default; final decode quality is unaffected.
-        if (!enableStreamingPartials) return
+        // KBP: partials re-decode the ENTIRE buffer each round, so the interval
+        // adapts to buffer length (800ms floor, +80ms per buffered second) —
+        // live text stays responsive on short notes without lagging long ones.
         if (partialDecodesDisabled) return
 
         val now = System.currentTimeMillis()
-        if (now - lastPartialDecodeAtMs < PARTIAL_DECODE_INTERVAL_MS) return
+        val bufferedSeconds = floatSamples.position() / 16000f
+        val minIntervalMs = (PARTIAL_DECODE_INTERVAL_MS + bufferedSeconds * 80).toLong()
+        if (now - lastPartialDecodeAtMs < minIntervalMs) return
 
         // Only decode once model preloading has settled; peek without loading so a
         // slow model load never blocks the recorder.
