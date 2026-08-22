@@ -247,6 +247,15 @@ class AudioRecognizer(
 
         unfocusAudio()
 
+        // Decode jobs are only cooperatively cancelled — a native decode can still
+        // be reading floatSamples right now. Join them before any buffer swap.
+        val pendingModelJob = modelJob
+        val pendingPartialJob = partialDecodeJob
+        lifecycleScope.launch(Dispatchers.Default) {
+            pendingModelJob?.join()
+            pendingPartialJob?.join()
+            releaseBuffer()
+        }
         clearCommunicationDevice()
     }
 
@@ -315,8 +324,8 @@ class AudioRecognizer(
     }
 
     private fun expandSpaceIfAllowed(): Boolean {
-        if(canExpandSpace) {
-            // Allocate an extra 30 seconds
+        if(canExpandSpace && !BufferGrowth.isAtCap(floatSamples.capacity())) {
+            // Allocate an extra 30 seconds, but never beyond the hard cap.
             val newSampleBuffer = FloatBuffer.allocate(BufferGrowth.nextCapacity(floatSamples.capacity()))
             //Log.d("AudioRecognizer", "Allocating extra space: ${floatSamples.capacity() / 16000} -> ${newSampleBuffer.capacity() / 16000}")
             newSampleBuffer.put(floatSamples.array(), 0, floatSamples.capacity() - floatSamples.remaining())
@@ -324,6 +333,21 @@ class AudioRecognizer(
             return true
         }
         return false
+    }
+
+    /**
+     * Releases any buffer expansion accumulated during a recording session.
+     * The initial 30-second warm allocation is preserved so the next session
+     * starts fresh without regressing startup latency.
+     */
+    private fun releaseBuffer() {
+        // Never swap while a session is live: the recording job writes into this
+        // buffer, and an expanded buffer is harmless to keep until the session ends.
+        if (isRecording) return
+        val warmCapacity = BufferGrowth.SAMPLES_PER_SECOND * BufferGrowth.EXPAND_SECONDS
+        if (floatSamples.capacity() > warmCapacity) {
+            floatSamples = FloatBuffer.allocate(warmCapacity)
+        }
     }
 
     private suspend fun recordingJob(recorder: AudioRecord, vad: VadModel?) {
@@ -693,7 +717,11 @@ class AudioRecognizer(
 
         modelJob = lifecycleScope.launch {
             withContext(Dispatchers.Default) {
-                runModel()
+                try {
+                    runModel()
+                } finally {
+                    releaseBuffer()
+                }
             }
         }
     }

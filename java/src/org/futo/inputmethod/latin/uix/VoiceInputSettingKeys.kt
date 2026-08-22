@@ -75,3 +75,11 @@ val ANIMATE_BUBBLE = SettingsKey(
     key = booleanPreferencesKey("animate_bubble"),
     default = true
 )
+
+// KBP: online punctuation+capitalization polish for final transcripts. Strictly
+// opt-in: defaults OFF, never blocks insertion, falls back to offline-processed
+// text on any failure.
+val POLISH_DICTATION_ONLINE = SettingsKey(
+    key = booleanPreferencesKey("polish_dictation_online"),
+    default = false
+)

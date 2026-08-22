@@ -36,6 +36,7 @@ import org.futo.inputmethod.latin.uix.ENABLE_SOUND
 import org.futo.inputmethod.latin.uix.KeyboardManagerForAction
 import org.futo.inputmethod.latin.uix.PREFER_BLUETOOTH
 import org.futo.inputmethod.latin.uix.PersistentActionState
+import org.futo.inputmethod.latin.uix.POLISH_DICTATION_ONLINE
 import org.futo.inputmethod.latin.uix.ResourceHelper
 import org.futo.inputmethod.latin.uix.USE_PERSONAL_DICT
 import org.futo.inputmethod.latin.uix.USE_VAD_AUTOSTOP
@@ -282,15 +283,33 @@ private class VoiceInputActionWindow(
         manager.getLifecycleScope().launch(Dispatchers.Main) {
             // Voice commands are post-processed on the Parakeet path only; any
             // other engine's transcript is committed verbatim.
-            if (voiceCommandsEnabled) {
-                when (val processed = VoiceCommandProcessor.process(result)) {
-                    is ProcessedVoiceResult.InsertText -> commitTranscript(processed.text, result)
-                    ProcessedVoiceResult.DeleteLastSentence -> handleDeleteLastSentence()
-                    ProcessedVoiceResult.PerformImeAction -> handlePerformImeAction()
+            val afterVoiceCommands = when {
+                voiceCommandsEnabled -> when (val processed = VoiceCommandProcessor.process(result)) {
+                    is ProcessedVoiceResult.InsertText -> processed.text
+                    ProcessedVoiceResult.DeleteLastSentence -> {
+                        handleDeleteLastSentence()
+                        return@launch
+                    }
+                    ProcessedVoiceResult.PerformImeAction -> {
+                        handlePerformImeAction()
+                        return@launch
+                    }
                 }
-            } else {
-                commitTranscript(result, result)
+                else -> result
             }
+
+            // Always run the conservative offline rules on the final transcript.
+            // Partials are never touched; this path is only for finished results.
+            val offlineText = offlineProcessTranscript(afterVoiceCommands)
+
+            // Optional online polish: opt-in, default OFF, never blocks insertion.
+            val finalText = if (context.getSetting(POLISH_DICTATION_ONLINE)) {
+                polishDictationTranscript(context, offlineText)
+            } else {
+                offlineText
+            }
+
+            commitTranscript(finalText, result)
         }
     }
 

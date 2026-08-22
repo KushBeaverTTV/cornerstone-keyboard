@@ -595,6 +595,8 @@
     <string name="voice_input_settings_autostop_vad_subtitle">Automatically stop when silence is detected. You may need to manually stop regardless if there\'s too much background noise.</string>
     <string name="voice_input_settings_animate_bubble">Animations</string>
     <string name="voice_input_settings_animate_bubble_subtitle">Display a bubble that reacts to speech</string>
+    <string name="voice_input_settings_polish_dictation_online">Polish dictation online</string>
+    <string name="voice_input_settings_polish_dictation_online_subtitle">Send final transcripts to the agent to restore punctuation and capitalization (uses network)</string>
     <string name="voice_input_settings_change_models">Models</string>
     <string name="voice_input_settings_change_models_subtitle">To change the models, visit Languages &amp; Models menu</string>
 

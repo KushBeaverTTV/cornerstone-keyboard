@@ -95,5 +95,31 @@ class VoicePolicyTest {
     fun bufferGrowthConstants_arePreserved() {
         assertEquals(16000, BufferGrowth.SAMPLES_PER_SECOND)
         assertEquals(30, BufferGrowth.EXPAND_SECONDS)
+        assertEquals(5 * 60, BufferGrowth.MAX_BUFFER_SECONDS)
+        assertEquals(5 * 60 * 16000, BufferGrowth.MAX_CAPACITY)
+    }
+
+    @Test
+    fun bufferGrowthIsAtCap_atMaxCapacity_returnsTrue() {
+        assertTrue(BufferGrowth.isAtCap(BufferGrowth.MAX_CAPACITY))
+    }
+
+    @Test
+    fun bufferGrowthIsAtCap_aboveMaxCapacity_returnsTrue() {
+        assertTrue(BufferGrowth.isAtCap(BufferGrowth.MAX_CAPACITY + 1))
+    }
+
+    @Test
+    fun bufferGrowthIsAtCap_belowMaxCapacity_returnsFalse() {
+        assertFalse(BufferGrowth.isAtCap(BufferGrowth.MAX_CAPACITY - 1))
+        assertFalse(BufferGrowth.isAtCap(BufferGrowth.SAMPLES_PER_SECOND * 60))
+        assertFalse(BufferGrowth.isAtCap(0))
+    }
+
+    @Test
+    fun bufferGrowthNextCapacity_atCap_wouldExceedMaxCapacity() {
+        // The 30-second growth step would push past the 5-minute cap, so the
+        // recognizer treats the cap as reached and finishes instead.
+        assertTrue(BufferGrowth.nextCapacity(BufferGrowth.MAX_CAPACITY) > BufferGrowth.MAX_CAPACITY)
     }
 }

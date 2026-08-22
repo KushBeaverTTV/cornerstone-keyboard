@@ -55,11 +55,24 @@ object BufferGrowth {
     // Each expansion allocates an extra 30 seconds of audio buffer.
     const val EXPAND_SECONDS = 30
 
+    // Hard cap: never accumulate more than 5 minutes of 16kHz float audio.
+    const val MAX_BUFFER_SECONDS = 5 * 60
+    const val MAX_CAPACITY = SAMPLES_PER_SECOND * MAX_BUFFER_SECONDS
+
     /**
      * Returns the next buffer capacity given the current [capacity].
      * Current strategy: add 30 seconds worth of samples each expansion.
      */
     fun nextCapacity(capacity: Int): Int {
         return capacity + SAMPLES_PER_SECOND * EXPAND_SECONDS
+    }
+
+    /**
+     * Returns true when [capacity] has reached the maximum allowed buffer size.
+     * At this cap AudioRecognizer triggers the normal finish path instead of
+     * growing the buffer further.
+     */
+    fun isAtCap(capacity: Int): Boolean {
+        return capacity >= MAX_CAPACITY
     }
 }

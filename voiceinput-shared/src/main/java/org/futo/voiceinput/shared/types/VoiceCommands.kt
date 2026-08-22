@@ -22,8 +22,9 @@ sealed interface ProcessedVoiceResult {
  *  - Standalone commands ("delete that", "send it") match only when they ARE the
  *    whole utterance. Interpreting them mid-sentence would misfire constantly
  *    ("send it to my lawyer" is not a send command).
- *  - Inline commands ("new line", "new paragraph") rewrite in place wherever they
- *    appear, since they almost never occur literally in dictated prose.
+ *  - Inline commands ("new line", "new paragraph", "period", "comma", etc.) rewrite
+ *    in place wherever they appear, since they almost never occur literally in
+ *    dictated prose.
  *
  * The guarantee that matters most: speech that matches no command comes back as
  * InsertText unchanged — nothing is ever swallowed.
@@ -47,6 +48,19 @@ object VoiceCommandProcessor {
         Regex("""[ \t]*\bnew paragraph\b[ \t]*[.,!?;:]?[ \t]*""", RegexOption.IGNORE_CASE)
     private val NEW_LINE_REGEX =
         Regex("""[ \t]*\bnew line\b[ \t]*[.,!?;:]?[ \t]*""", RegexOption.IGNORE_CASE)
+
+    // Spoken punctuation is rewritten with a trailing space, absorbing surrounding
+    // horizontal whitespace and any trailing punctuation the recognizer added — same
+    // cleanup style as "new line". "hello period world" -> "hello. world".
+    private val PERIOD_REGEX =
+        Regex("""[ \t]*\b(?:period|full stop)\b[ \t]*[.,!?;:]?[ \t]*""", RegexOption.IGNORE_CASE)
+    private val COMMA_REGEX =
+        Regex("""[ \t]*\bcomma\b[ \t]*[.,!?;:]?[ \t]*""", RegexOption.IGNORE_CASE)
+    private val QUESTION_MARK_REGEX =
+        Regex("""[ \t]*\bquestion mark\b[ \t]*[.,!?;:]?[ \t]*""", RegexOption.IGNORE_CASE)
+    private val EXCLAMATION_MARK_REGEX =
+        Regex("""[ \t]*\b(?:exclamation mark|exclamation point)\b[ \t]*[.,!?;:]?[ \t]*""", RegexOption.IGNORE_CASE)
+
     private val SPACE_BEFORE_NEWLINE_REGEX = Regex("""[ \t]+\n""")
     private val EXCESS_NEWLINES_REGEX = Regex("""\n{3,}""")
 
@@ -67,6 +81,10 @@ object VoiceCommandProcessor {
     private fun applyInlineCommands(text: String): String {
         var out = NEW_PARAGRAPH_REGEX.replace(text, "\n\n")
         out = NEW_LINE_REGEX.replace(out, "\n")
+        out = PERIOD_REGEX.replace(out, ". ")
+        out = COMMA_REGEX.replace(out, ", ")
+        out = QUESTION_MARK_REGEX.replace(out, "? ")
+        out = EXCLAMATION_MARK_REGEX.replace(out, "! ")
         out = SPACE_BEFORE_NEWLINE_REGEX.replace(out, "\n")
         out = EXCESS_NEWLINES_REGEX.replace(out, "\n\n")
         return out.trim()

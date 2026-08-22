@@ -69,6 +69,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.yield
 import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
@@ -153,11 +154,14 @@ internal sealed class AgentResult {
 
 // `draft` is the full text to send — callers compose any prompt into it first.
 // `endpoint` defaults to the shared hub; custom agents pass their override URL.
+// `client` may be supplied to override the default long-timeout client (e.g. for
+// short-latency paths such as dictation polish).
 internal fun postToAgent(
     draft: String,
     token: String,
     agent: String,
-    endpoint: String = DEFAULT_AGENT_ENDPOINT
+    endpoint: String = DEFAULT_AGENT_ENDPOINT,
+    client: OkHttpClient = agentHttpClient
 ): AgentResult {
     val body = JSONObject().put("text", draft).put("agent", agent).toString()
         .toRequestBody("application/json; charset=utf-8".toMediaType())
@@ -168,7 +172,7 @@ internal fun postToAgent(
         .build()
 
     return try {
-        agentHttpClient.newCall(request).execute().use { response ->
+        client.newCall(request).execute().use { response ->
             if (!response.isSuccessful) return AgentResult.Http(response.code)
             val responseBody = response.body?.string()?.trim() ?: return AgentResult.Parse
             if (responseBody.isBlank()) return AgentResult.Parse
