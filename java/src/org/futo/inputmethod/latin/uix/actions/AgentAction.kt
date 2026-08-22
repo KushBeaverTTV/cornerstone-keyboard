@@ -5,11 +5,7 @@ import android.util.Log
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import org.futo.inputmethod.latin.BuildConfig
 import androidx.datastore.preferences.core.stringPreferencesKey
-import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
-import okhttp3.Request
-import okhttp3.RequestBody.Companion.toRequestBody
-import org.json.JSONObject
 import org.futo.inputmethod.latin.R
 import org.futo.inputmethod.latin.SuggestedWords
 import org.futo.inputmethod.latin.SuggestedWords.SuggestedWordInfo
@@ -78,33 +74,6 @@ internal fun isPasswordField(inputType: Int): Boolean {
                     variation == InputType.TYPE_NUMBER_VARIATION_PASSWORD)
 }
 
-// `draft` is the full text to send — callers compose any prompt into it first.
-// `endpoint` defaults to the shared hub; custom agents pass their override URL.
-internal fun postToAgent(
-    draft: String,
-    token: String,
-    agent: String,
-    endpoint: String = DEFAULT_AGENT_ENDPOINT
-): String? {
-    val body = JSONObject().put("text", draft).put("agent", agent).toString()
-        .toRequestBody("application/json; charset=utf-8".toMediaType())
-    val request = Request.Builder()
-        .url(endpoint)
-        .header("Authorization", "Bearer $token")
-        .post(body)
-        .build()
-
-    return try {
-        agentHttpClient.newCall(request).execute().use { response ->
-            if (!response.isSuccessful) return null
-            val responseBody = response.body?.string() ?: return null
-            JSONObject(responseBody).optString("answer").ifBlank { null }
-        }
-    } catch (e: Exception) {
-        Log.w("AgentAction", "agent request failed", e)
-        null
-    }
-}
 
 private fun showAnswerOnStrip(manager: KeyboardManagerForAction, answer: String): Boolean {
     // Strip can't show the answer when the IME doesn't implement the accessor
