@@ -277,4 +277,8 @@ mobile devices. [CHAR LIMIT=25] -->
          This resource is copied from packages/apps/Settings/res/values/strings.xml -->
     <!-- This resource is corresponding to msgid="5433275485499039199" -->
     <string name="user_dict_fast_scroll_alphabet">\u0020ABCDEFGHIJKLMNOPQRSTUVWXYZ</string>
+    <string name="training_worker_notification_title">Model Training</string>
+    <string name="training_worker_notification_progress">Training…</string>
+    <string name="training_worker_notification_cancel">Halt</string>
+    <string name="training_worker_notification_channel_name">Model Training Notifications</string>
 </resources>

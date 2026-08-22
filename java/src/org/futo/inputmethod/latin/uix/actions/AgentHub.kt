@@ -63,9 +63,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.yield
 import okhttp3.Request
@@ -1222,7 +1222,7 @@ internal class AgentHubWindow(
                 ) {
                     if ((lastRequest?.draftDeleteCount ?: 0) > 0) {
                         HubChip(text = "Replace draft") {
-                            replaceDraftWith(lastAgentText, lastRequest!!.draftDeleteCount)
+                            lastRequest?.let { replaceDraftWith(lastAgentText, it.draftDeleteCount) }
                         }
                         Spacer(modifier = Modifier.width(8.dp))
                     }
@@ -1413,7 +1413,7 @@ internal class AgentHubWindow(
             ) {
                 when {
                     dictationModelMissing -> DictationModelDownloading(onReady = { startDictation(agentId) })
-                    dictationView != null -> dictationView!!.Content()
+                    dictationView != null -> dictationView?.Content()
                     else -> Text(
                         "Starting microphone…",
                         fontSize = 14.sp,
@@ -1812,7 +1812,7 @@ internal class AgentHubWindow(
             setTorch(context, false)
             torchOn = false
         }
-        runBlocking { dictationModelManager.cleanUp() }
+        manager.getLifecycleScope().launch(Dispatchers.IO + NonCancellable) { dictationModelManager.cleanUp() }
         return CloseResult.Default
     }
 

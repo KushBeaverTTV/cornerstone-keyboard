@@ -89,7 +89,6 @@ import androidx.recyclerview.widget.RecyclerView
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -777,9 +776,12 @@ fun EmojiGrid(
         emojis.associate { it.emoji to it.category }
     }
 
-    val recentEmojis = remember {
-        runBlocking { context.getRecentEmojis() }.map {
-            EmojiItem(it, description = "", category = emojiCategoryMap[it] ?: "", skinTones = false)
+    var recentEmojis by remember { mutableStateOf(emptyList<EmojiItem>()) }
+    LaunchedEffect(Unit) {
+        recentEmojis = withContext(Dispatchers.IO) {
+            context.getRecentEmojis().map {
+                EmojiItem(it, description = "", category = emojiCategoryMap[it] ?: "", skinTones = false)
+            }
         }
     }
 
@@ -1236,10 +1238,13 @@ val EmojiAction = Action(
                             listOf(
                                 DialogRequestItem(resources.getString(R.string.action_emoji_clear_recent_emojis_cancel)) {},
                                 DialogRequestItem(resources.getString(R.string.action_emoji_clear_recent_emojis_clear)) {
-                                    runBlocking {
-                                        manager.getContext().resetRecentEmojis()
+                                    manager.getLifecycleScope().launch {
+                                        try {
+                                            manager.getContext().resetRecentEmojis()
+                                        } finally {
+                                            manager.closeActionWindow()
+                                        }
                                     }
-                                    manager.closeActionWindow()
                                 },
                             ),
                             {}

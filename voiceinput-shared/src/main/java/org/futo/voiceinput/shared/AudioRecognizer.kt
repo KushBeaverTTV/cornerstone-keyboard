@@ -145,7 +145,7 @@ class AudioRecognizer(
                 focusRequest =
                     AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_EXCLUSIVE)
                         .build()
-                audioManager.requestAudioFocus(focusRequest!!)
+                focusRequest?.let { audioManager.requestAudioFocus(it) }
             }
         }catch(e: Exception) {
             e.printStackTrace()
@@ -156,8 +156,8 @@ class AudioRecognizer(
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
-                if (focusRequest != null) {
-                    audioManager.abandonAudioFocusRequest(focusRequest!!)
+                focusRequest?.let {
+                    audioManager.abandonAudioFocusRequest(it)
                 }
                 focusRequest = null
             }

@@ -1,28 +1,25 @@
 package org.futo.inputmethod.latin.xlm
 
-import android.content.Context
-import androidx.compose.runtime.mutableStateOf
-import androidx.datastore.preferences.core.intPreferencesKey
-import kotlinx.coroutines.flow.MutableSharedFlow
-
-/*
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.content.Context
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.PowerManager
 import androidx.annotation.RequiresApi
+import androidx.compose.runtime.mutableStateOf
 import androidx.core.app.NotificationCompat
+import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.work.Constraints
 import androidx.work.CoroutineWorker
 import androidx.work.Data
 import androidx.work.ForegroundInfo
-import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequest
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.withContext
 import org.futo.inputmethod.latin.R
 import org.futo.inputmethod.latin.uix.USE_TRANSFORMER_FINETUNING
@@ -30,6 +27,7 @@ import org.futo.inputmethod.latin.uix.getSetting
 import org.futo.inputmethod.latin.uix.isDirectBootUnlocked
 import java.io.File
 import java.util.concurrent.TimeUnit
+
 class TrainingWorker(val context: Context, val parameters: WorkerParameters) : CoroutineWorker(context, parameters) {
     private val notificationManager =
         context.getSystemService(Context.NOTIFICATION_SERVICE) as
@@ -47,13 +45,16 @@ class TrainingWorker(val context: Context, val parameters: WorkerParameters) : C
         }
 
         TrainingWorkerStatus.isTraining.value = true
-        setForeground(createForegroundInfo("Training..."))
+        try {
+            setForeground(createForegroundInfo(applicationContext.getString(R.string.training_worker_notification_progress)))
 
-        val modelToTrain = parameters.inputData.getString("modelToTrain")
-        val trainingData = parameters.inputData.getString("trainingData")
+            val modelToTrain = parameters.inputData.getString("modelToTrain")
+            val trainingData = parameters.inputData.getString("trainingData")
 
-        TrainingWorkerStatus.state.emit(train(customModel = modelToTrain, customTrainingData = trainingData))
-        TrainingWorkerStatus.isTraining.value = false
+            TrainingWorkerStatus.state.emit(train(customModel = modelToTrain, customTrainingData = trainingData))
+        } finally {
+            TrainingWorkerStatus.isTraining.value = false
+        }
         println("TrainingWorker has ended")
         return Result.success()
     }
@@ -187,7 +188,7 @@ class TrainingWorker(val context: Context, val parameters: WorkerParameters) : C
         val wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "FUTOLatinIME::modelTrainer")
         withContext(Dispatchers.Default) {
             println("Starting to train")
-            wakeLock.acquire(120*60*1000L /*1 hour*/)
+            wakeLock.acquire(120*60*1000L /*2 hours*/)
             try {
                 trainer.train()
             } finally {
@@ -216,8 +217,8 @@ class TrainingWorker(val context: Context, val parameters: WorkerParameters) : C
     // Creates an instance of ForegroundInfo which can be used to update the
     // ongoing notification.
     private fun createForegroundInfo(progress: String): ForegroundInfo {
-        val title = "Model Training"
-        val cancel = "Halt"
+        val title = applicationContext.getString(R.string.training_worker_notification_title)
+        val cancel = applicationContext.getString(R.string.training_worker_notification_cancel)
         // This PendingIntent can be used to cancel the worker
         val intent = WorkManager.getInstance(applicationContext)
                 .createCancelPendingIntent(id)
@@ -249,7 +250,7 @@ class TrainingWorker(val context: Context, val parameters: WorkerParameters) : C
     private fun createChannel() {
         val channel = NotificationChannel(
             CHANNEL_ID,
-            "Model Training Notifications",
+            applicationContext.getString(R.string.training_worker_notification_channel_name),
             NotificationManager.IMPORTANCE_MIN
         )
 
@@ -268,13 +269,11 @@ public fun scheduleTrainingWorkerBackground(context: Context) {
         .setRequiresBatteryNotLow(true)
         .setRequiresCharging(true)
         .setRequiresDeviceIdle(true)
-        //.setRequiredNetworkType(NetworkType.UNMETERED) // If device is on a metered network, the user may be travelling
         .build()
-    
+
     val request = PeriodicWorkRequest.Builder(
         TrainingWorker::class.java,
         20L, TimeUnit.HOURS,
-        // 12L, TimeUnit.HOURS
     ).addTag(WORKER_TAG).setConstraints(constraints).build()
 
     workManager.enqueue(request)
@@ -301,7 +300,6 @@ public fun scheduleTrainingWorkerImmediately(context: Context, model: ModelInfoL
 
     workManager.enqueue(workRequest)
 }
-*/
 
 val NUM_TRAINING_RUNS_KEY = intPreferencesKey("training_runs_count")
 
@@ -334,6 +332,3 @@ object TrainingWorkerStatus {
     val loss = MutableSharedFlow<Float>(replay = 4)
     val progress = MutableSharedFlow<Float>(replay = 4)
 }
-
-public fun scheduleTrainingWorkerBackground(context: Context) { }
-public fun scheduleTrainingWorkerImmediately(context: Context, model: ModelInfoLoader? = null, trainingData: String? = null) { }
