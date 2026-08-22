@@ -124,7 +124,6 @@ class AudioRecognizer(
     private var partialDecodesDisabled = false
 
     companion object {
-        private const val PARTIAL_DECODE_INTERVAL_MS = 800L
         // Don't burn a decode on the first instant of audio — sub-second decodes
         // only produce noise.
         private const val PARTIAL_DECODE_MIN_SAMPLES = 16000 // 1s at 16kHz
@@ -318,7 +317,7 @@ class AudioRecognizer(
     private fun expandSpaceIfAllowed(): Boolean {
         if(canExpandSpace) {
             // Allocate an extra 30 seconds
-            val newSampleBuffer = FloatBuffer.allocate(floatSamples.capacity() + 16000 * 30)
+            val newSampleBuffer = FloatBuffer.allocate(BufferGrowth.nextCapacity(floatSamples.capacity()))
             //Log.d("AudioRecognizer", "Allocating extra space: ${floatSamples.capacity() / 16000} -> ${newSampleBuffer.capacity() / 16000}")
             newSampleBuffer.put(floatSamples.array(), 0, floatSamples.capacity() - floatSamples.remaining())
             floatSamples = newSampleBuffer
@@ -356,7 +355,7 @@ class AudioRecognizer(
 
             // KBP: 66 frames (~2s) cut people off mid-thought on hesitations.
             // ~6s of consecutive silence before auto-stopping.
-            val hasNotTalkedRecently = hasTalked && (numConsecutiveNonSpeech > 200) && useVAD
+            val hasNotTalkedRecently = VadPolicy.shouldStop(hasTalked, numConsecutiveNonSpeech, useVAD)
             if (isRunningOutOfSpace || hasNotTalkedRecently) {
                 yield()
                 withContext(Dispatchers.Main) {
@@ -495,7 +494,7 @@ class AudioRecognizer(
 
         val now = System.currentTimeMillis()
         val bufferedSeconds = floatSamples.position() / 16000f
-        val minIntervalMs = (PARTIAL_DECODE_INTERVAL_MS + bufferedSeconds * 80).toLong()
+        val minIntervalMs = PartialThrottle.intervalMs(bufferedSeconds)
         if (now - lastPartialDecodeAtMs < minIntervalMs) return
 
         // Only decode once model preloading has settled; peek without loading so a
