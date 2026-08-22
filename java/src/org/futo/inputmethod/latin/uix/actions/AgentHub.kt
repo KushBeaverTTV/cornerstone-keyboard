@@ -169,6 +169,11 @@ internal class AgentHubWindow(
         get() = manager.getLatinIMEForDebug().currentInputEditorInfo
             ?.let { isPasswordField(it.inputType) } == true
 
+    // Private/incognito fields (browser private mode, lockdown apps) are treated
+    // like password fields: the hub must not capture or send their contents.
+    internal val isIncognitoContext: Boolean
+        get() = manager.isIncognitoContext()
+
     internal fun agentToken(): String =
         context.getSetting(AGENT_KEY_TOKEN).ifBlank { BuildConfig.AGENT_KEY_TOKEN }
 
@@ -287,6 +292,10 @@ internal class AgentHubWindow(
     internal fun sendFollowUp(agentId: String) {
         val text = followUpText.trim()
         if (text.isEmpty()) return
+        if (isIncognitoContext) {
+            detailState = DetailState.Hint("Agent disabled in private fields")
+            return
+        }
         followUpText = ""
         // The spoken/typed question IS the prompt — same contract as Ask by voice.
         postPrompt(
@@ -305,9 +314,13 @@ internal class AgentHubWindow(
     }
 
     internal fun runTranslate(agentId: String, language: String) {
-        translateText = ""
         // Belt-and-braces guard mirroring runOption.
         if (isPasswordContext) return
+        if (isIncognitoContext) {
+            detailState = DetailState.Hint("Agent disabled in private fields")
+            return
+        }
+        translateText = ""
         val transaction = manager.createInputTransaction()
         val beforeCursor = transaction.textContext.beforeCursor?.toString().orEmpty()
         val draft = if (wholeField) {
@@ -370,6 +383,10 @@ internal class AgentHubWindow(
     internal fun runOption(agentId: String, option: HubOption) {
         // Belt-and-braces: buttons are disabled in these states, but never rely on UI state alone.
         if (isPasswordContext) return
+        if (isIncognitoContext) {
+            detailState = DetailState.Hint("Agent disabled in private fields")
+            return
+        }
 
         // Read-only transaction: capture the draft, then cancel so nothing changes.
         val transaction = manager.createInputTransaction()
@@ -410,13 +427,19 @@ internal class AgentHubWindow(
      * follow-ups, and Regenerate): Thinking on the Main dispatcher, POST off
      * it, result back on Main. The conversation thread gets the user turn up
      * front — so a slow answer never loses what was asked — and the agent's
-     * turn only on success (a failed request leaves nothing behind). AgentMemory
-     * records successful answers exactly as before. Regenerate passes
-     * recordUser=false: its user turn is already in the thread, and the new
-     * answer REPLACES the old agent bubble instead of duplicating the pair.
+     * turn on success. Failed requests become an error turn inside the thread
+     * with a Retry chip instead of a generic error screen. AgentMemory records
+     * successful answers exactly as before. Regenerate passes recordUser=false:
+     * its user turn is already in the thread, and the new answer REPLACES the
+     * old agent/error bubble instead of duplicating the pair.
      */
     internal fun postPrompt(request: AgentRequest, recordUser: Boolean = true) {
         val name = agentName(request.agentId)
+
+        if (isIncognitoContext) {
+            detailState = DetailState.Hint("Agent disabled in private fields")
+            return
+        }
 
         val token = agentToken()
         if (token.isBlank()) {
@@ -461,31 +484,62 @@ internal class AgentHubWindow(
                 append(request.userText)
             }
             val endpoint = custom?.endpoint?.takeIf { it.isNotBlank() } ?: DEFAULT_AGENT_ENDPOINT
-            val answer = postToAgent(prompt, token, request.agentId, endpoint)
-            Log.i("AgentHub", "answer from ${request.agentId}: len=${answer?.length} head=${answer?.take(60)}")
+            val result = postToAgent(prompt, token, request.agentId, endpoint)
+            val answerText = (result as? AgentResult.Success)?.text
+            Log.i("AgentHub", "answer from ${request.agentId}: success=${result is AgentResult.Success} head=${answerText?.take(60)}")
             withContext(Dispatchers.Main) {
-                if (answer != null) {
-                    AgentMemory.record(request.agentId, request.label, request.userText, answer)
-                    if (recordUser.not()) {
-                        // Regenerate: swap the previous agent bubble for the new answer.
-                        ConversationThreads.replaceLastAgentTurn(request.agentId, answer)
-                    } else {
-                        ConversationThreads.add(
-                            request.agentId,
-                            ThreadTurn(fromUser = false, text = answer, label = request.label)
-                        )
+                when (result) {
+                    is AgentResult.Success -> {
+                        lastAnswerRequest = request
+                        AgentMemory.record(request.agentId, request.label, request.userText, result.text)
+                        if (recordUser.not()) {
+                            // Regenerate: swap the previous agent/error bubble for the new answer.
+                            ConversationThreads.replaceLastAgentTurn(request.agentId, result.text)
+                        } else {
+                            ConversationThreads.add(
+                                request.agentId,
+                                ThreadTurn(fromUser = false, text = result.text, label = request.label)
+                            )
+                        }
+                        threadVersion++
+                        detailState = DetailState.Thread
                     }
-                    threadVersion++
-                    lastAnswerRequest = request
-                    detailState = DetailState.Thread
-                } else {
-                    // The pending user turn would dangle with no reply — pull it back out.
-                    if (recordUser) ConversationThreads.dropLast(request.agentId)
-                    threadVersion++
-                    detailState = DetailState.Failed("$name request failed. Check connection and token.")
+                    else -> {
+                        val message = agentResultMessage(result, name)
+                        if (recordUser.not()) {
+                            // Regenerate/Retry: replace the previous agent/error bubble.
+                            ConversationThreads.replaceLastAgentTurn(
+                                request.agentId,
+                                message,
+                                errorResult = result,
+                                request = request
+                            )
+                        } else {
+                            ConversationThreads.add(
+                                request.agentId,
+                                ThreadTurn(
+                                    fromUser = false,
+                                    text = message,
+                                    label = request.label,
+                                    errorResult = result,
+                                    request = request
+                                )
+                            )
+                        }
+                        threadVersion++
+                        detailState = DetailState.Thread
+                    }
                 }
             }
         }
+    }
+
+    internal fun agentResultMessage(result: AgentResult, agentName: String): String = when (result) {
+        is AgentResult.Success -> result.text
+        AgentResult.Timeout -> "Timed out — the agent server didn't answer in time"
+        is AgentResult.Http -> "Server error (HTTP ${result.code})"
+        AgentResult.Parse -> "Couldn't read the agent's reply"
+        AgentResult.Network -> "Can't reach the agent server"
     }
 
     internal fun insertAnswer(answer: String) {
@@ -539,6 +593,10 @@ internal class AgentHubWindow(
                 teardownDictation()
                 if (result.isBlank()) {
                     detailState = DetailState.Hint("Didn't catch that — try again.")
+                    return@launch
+                }
+                if (isIncognitoContext) {
+                    detailState = DetailState.Hint("Agent disabled in private fields")
                     return@launch
                 }
                 // The spoken text IS the question — no prefix, no draft, so no

@@ -250,7 +250,13 @@ internal fun translatePrefix(language: String) =
  * follow-up prompt can carry real context (the summaries in AgentMemory are
  * orientation only). role: true = user, false = agent.
  */
-internal data class ThreadTurn(val fromUser: Boolean, val text: String, val label: String)
+internal data class ThreadTurn(
+    val fromUser: Boolean,
+    val text: String,
+    val label: String,
+    val errorResult: AgentResult? = null,
+    val request: AgentRequest? = null
+)
 
 /**
  * Window-lifetime per-agent conversation threads. Back-navigation keeps the
@@ -269,11 +275,20 @@ internal object ConversationThreads {
     }
 
     @Synchronized
-    fun replaceLastAgentTurn(agentId: String, text: String): Boolean {
+    fun replaceLastAgentTurn(
+        agentId: String,
+        text: String,
+        errorResult: AgentResult? = null,
+        request: AgentRequest? = null
+    ): Boolean {
         val queue = threads[agentId] ?: return false
         for (index in queue.indices.reversed()) {
             if (!queue[index].fromUser) {
-                queue[index] = queue[index].copy(text = text)
+                queue[index] = queue[index].copy(
+                    text = text,
+                    errorResult = errorResult,
+                    request = request
+                )
                 return true
             }
         }
@@ -295,7 +310,7 @@ internal object ConversationThreads {
     fun contextBlock(agentId: String, maxTurns: Int = 8): String? {
         val queue = threads[agentId]?.takeIf { it.isNotEmpty() } ?: return null
         val recent = queue.takeLast(maxTurns)
-        val lines = recent.map { turn ->
+        val lines = recent.filter { it.errorResult == null }.map { turn ->
             val speaker = if (turn.fromUser) "User" else "You"
             "$speaker: \"${turn.text.take(300)}\""
         }

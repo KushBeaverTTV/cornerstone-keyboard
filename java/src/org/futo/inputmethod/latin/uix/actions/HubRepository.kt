@@ -72,6 +72,8 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
+import java.io.IOException
+import java.net.SocketTimeoutException
 import org.futo.inputmethod.latin.BuildConfig
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import org.futo.inputmethod.latin.uix.SettingsKey
@@ -141,6 +143,14 @@ internal fun fetchAgentStatuses(): Map<String, AgentStatus>? {
 }
 
 
+internal sealed class AgentResult {
+    data class Success(val text: String) : AgentResult()
+    object Timeout : AgentResult()
+    data class Http(val code: Int) : AgentResult()
+    object Parse : AgentResult()
+    object Network : AgentResult()
+}
+
 // `draft` is the full text to send — callers compose any prompt into it first.
 // `endpoint` defaults to the shared hub; custom agents pass their override URL.
 internal fun postToAgent(
@@ -148,7 +158,7 @@ internal fun postToAgent(
     token: String,
     agent: String,
     endpoint: String = DEFAULT_AGENT_ENDPOINT
-): String? {
+): AgentResult {
     val body = JSONObject().put("text", draft).put("agent", agent).toString()
         .toRequestBody("application/json; charset=utf-8".toMediaType())
     val request = Request.Builder()
@@ -159,13 +169,24 @@ internal fun postToAgent(
 
     return try {
         agentHttpClient.newCall(request).execute().use { response ->
-            if (!response.isSuccessful) return null
-            val responseBody = response.body?.string() ?: return null
-            JSONObject(responseBody).optString("answer").ifBlank { null }
+            if (!response.isSuccessful) return AgentResult.Http(response.code)
+            val responseBody = response.body?.string()?.trim() ?: return AgentResult.Parse
+            if (responseBody.isBlank()) return AgentResult.Parse
+            val answer = try {
+                JSONObject(responseBody).optString("answer").trim()
+            } catch (_: Exception) {
+                return AgentResult.Parse
+            }
+            if (answer.isBlank()) return AgentResult.Parse
+            AgentResult.Success(answer)
         }
+    } catch (e: SocketTimeoutException) {
+        AgentResult.Timeout
+    } catch (e: IOException) {
+        AgentResult.Network
     } catch (e: Exception) {
-        Log.w("AgentAction", "agent request failed", e)
-        null
+        Log.w("HubRepository", "agent request failed", e)
+        AgentResult.Network
     }
 }
 

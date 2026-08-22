@@ -562,6 +562,7 @@ import java.util.Locale
     @Composable
     internal fun AgentHubWindow.DetailOptions(agentId: String) {
         val passwordGuard = isPasswordContext
+        val incognitoGuard = isIncognitoContext
         val tokenMissing = agentToken().isBlank()
 
         Column(modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
@@ -597,7 +598,7 @@ import java.util.Locale
             HubPrimaryPill(
                 text = "Ask by voice",
                 onClick = { startDictation(agentId) },
-                enabled = !passwordGuard && !tokenMissing
+                enabled = !passwordGuard && !incognitoGuard && !tokenMissing
             )
             Spacer(modifier = Modifier.height(12.dp))
 
@@ -605,13 +606,22 @@ import java.util.Locale
                 rows = HUB_OPTIONS.map { option ->
                     HubRow(
                         label = option.label,
-                        enabled = !passwordGuard && !tokenMissing,
+                        enabled = !passwordGuard && !incognitoGuard && !tokenMissing,
                         onClick = { runOption(agentId, option) }
                     )
                 }
             )
 
-            if (passwordGuard) {
+            if (incognitoGuard) {
+                Spacer(modifier = Modifier.height(12.dp))
+                HubCard(accentColor = MaterialTheme.colorScheme.error) {
+                    Text(
+                        "${agentName(agentId)} is disabled in private fields.",
+                        fontSize = 14.sp,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+            } else if (passwordGuard) {
                 Spacer(modifier = Modifier.height(12.dp))
                 HubCard(accentColor = MaterialTheme.colorScheme.error) {
                     Text(
@@ -637,13 +647,15 @@ import java.util.Locale
     @Composable
     internal fun AgentHubWindow.ThreadView(agentId: String) {
         val passwordGuard = isPasswordContext
+        val incognitoGuard = isIncognitoContext
         val tokenMissing = agentToken().isBlank()
-        val canAct = !passwordGuard && !tokenMissing
+        val canAct = !passwordGuard && !incognitoGuard && !tokenMissing
 
         // Reading ConversationThreads through threadVersion makes every add/replace
         // in postPrompt recompose this view.
         val turns = remember(threadVersion, agentId) { ConversationThreads.turns(agentId) }
         val lastRequest = lastAnswerRequest
+        val lastAgentTurn = turns.lastOrNull { !it.fromUser && it.errorResult == null }
 
         Column(modifier = Modifier.fillMaxWidth()) {
             HubRowCard(
@@ -675,11 +687,12 @@ import java.util.Locale
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                         modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
                     ) {
-                        turns.forEach { turn ->
-                            if (turn.fromUser) {
-                                UserBubble(turn)
-                            } else {
-                                AgentBubble(agentId, turn)
+                        val lastAgentTurnIndex = turns.indexOfLast { !it.fromUser }
+                        turns.forEachIndexed { index, turn ->
+                            when {
+                                turn.fromUser -> UserBubble(turn)
+                                turn.errorResult != null -> ErrorBubble(agentId, turn, canAct && index == lastAgentTurnIndex)
+                                else -> AgentBubble(agentId, turn)
                             }
                         }
                     }
@@ -716,9 +729,8 @@ import java.util.Locale
                 HubChip(text = "Voice", onClick = { startDictation(agentId) }, enabled = canAct)
             }
 
-            // Last-answer actions operate on the most recent agent turn only.
-            val lastAgentText = turns.lastOrNull { !it.fromUser }?.text
-            if (lastAgentText != null) {
+            // Last-answer actions operate on the most recent successful agent turn only.
+            if (lastAgentTurn != null) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -727,19 +739,26 @@ import java.util.Locale
                 ) {
                     if ((lastRequest?.draftDeleteCount ?: 0) > 0) {
                         HubChip(text = "Replace draft") {
-                            lastRequest?.let { replaceDraftWith(lastAgentText, it.draftDeleteCount) }
+                            lastRequest?.let { replaceDraftWith(lastAgentTurn.text, it.draftDeleteCount) }
                         }
                         Spacer(modifier = Modifier.width(8.dp))
                     }
-                    HubChip(text = "Insert") { insertAnswer(lastAgentText) }
+                    HubChip(text = "Insert") { insertAnswer(lastAgentTurn.text) }
                     Spacer(modifier = Modifier.width(8.dp))
-                    HubChip(text = "Copy") { copyAnswer(lastAgentText) }
+                    HubChip(text = "Copy") { copyAnswer(lastAgentTurn.text) }
                     Spacer(modifier = Modifier.width(8.dp))
                     HubChip(text = "Regenerate", enabled = canAct) { regenerateLast(lastRequest) }
                 }
             }
 
-            if (passwordGuard) {
+            if (incognitoGuard) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    "${agentName(agentId)} is disabled in private fields.",
+                    fontSize = 13.sp,
+                    color = MaterialTheme.colorScheme.error
+                )
+            } else if (passwordGuard) {
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
                     "${agentName(agentId)} is disabled in password fields.",
@@ -812,6 +831,40 @@ import java.util.Locale
             }
         }
     }
+    @Composable
+    internal fun AgentHubWindow.ErrorBubble(agentId: String, turn: ThreadTurn, canAct: Boolean) {
+        Column {
+            Row(verticalAlignment = Alignment.Top) {
+                HubMonogram(name = agentName(agentId), active = false, size = 28.dp)
+                Spacer(modifier = Modifier.width(8.dp))
+                Surface(
+                    color = MaterialTheme.colorScheme.errorContainer,
+                    contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                    shape = RoundedCornerShape(topStart = 4.dp, topEnd = 16.dp, bottomStart = 16.dp, bottomEnd = 16.dp),
+                    modifier = Modifier.widthIn(max = 280.dp)
+                ) {
+                    Text(
+                        turn.text,
+                        fontSize = 14.sp,
+                        lineHeight = 20.sp,
+                        color = MaterialTheme.colorScheme.onErrorContainer,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.height(4.dp))
+            Row(
+                horizontalArrangement = Arrangement.Start,
+                modifier = Modifier.fillMaxWidth().padding(start = 36.dp)
+            ) {
+                HubChip(
+                    text = "Retry",
+                    enabled = canAct,
+                    onClick = { regenerateLast(turn.request ?: lastAnswerRequest) }
+                )
+            }
+        }
+    }
     /** Inline language input for Translate…; Go fires as soon as a language is set. */
     @Composable
     internal fun AgentHubWindow.TranslateCard(agentId: String, canAct: Boolean) {
@@ -840,7 +893,7 @@ import java.util.Locale
             }
             if (!canAct) {
                 Text(
-                    "Translation is disabled here (password field or missing token).",
+                    "Translation is disabled here (private field or missing token).",
                     fontSize = 12.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(top = 6.dp)
