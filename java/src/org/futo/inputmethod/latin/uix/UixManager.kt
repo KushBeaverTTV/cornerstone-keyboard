@@ -548,6 +548,8 @@ class UixActionKeyboardManager(val uixManager: UixManager, val latinIME: LatinIM
     override fun getCurrentIME(): IMEInterface {
         return latinIME.imeManager.getActiveIME(Settings.getInstance().current)
     }
+
+    override fun isIncognitoContext(): Boolean = IncognitoState.active
 }
 
 data class ActiveDialogRequest(

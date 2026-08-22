@@ -116,6 +116,8 @@ interface KeyboardManagerForAction {
     // Returns null if the current IME is not of this kind.
     // TODO: In the future make an IMEActionInterface for correctness
     fun getCurrentIME(): IMEInterface
+
+    fun isIncognitoContext(): Boolean
 }
 
 enum class CloseResult {

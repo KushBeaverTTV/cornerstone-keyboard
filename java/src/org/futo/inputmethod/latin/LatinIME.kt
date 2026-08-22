@@ -69,6 +69,7 @@ import org.futo.inputmethod.latin.uix.DynamicThemeProvider
 import org.futo.inputmethod.latin.uix.DynamicThemeProviderOwner
 import org.futo.inputmethod.latin.uix.EmojiTracker.useEmoji
 import org.futo.inputmethod.latin.uix.HiddenKeysSetting
+import org.futo.inputmethod.latin.uix.IncognitoState
 import org.futo.inputmethod.latin.uix.KeyBordersSetting
 import org.futo.inputmethod.latin.uix.KeyHintsSetting
 import org.futo.inputmethod.latin.uix.KeyboardColorScheme
@@ -622,6 +623,7 @@ class LatinIME : InputMethodServiceCompose(), LatinIMELegacy.SuggestionStripCont
 
     override fun onStartInput(attribute: EditorInfo?, restarting: Boolean) {
         super.onStartInput(attribute, restarting)
+        IncognitoState.active = (attribute?.imeOptions ?: 0) and EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING != 0
         latinIMELegacy.onStartInput(attribute, restarting)
         uixManager.inputStarted(attribute)
         //imeManager.onStartInput() // TODO: Is this call needed or not?
@@ -629,6 +631,7 @@ class LatinIME : InputMethodServiceCompose(), LatinIMELegacy.SuggestionStripCont
 
     override fun onStartInputView(info: EditorInfo?, restarting: Boolean) {
         super.onStartInputView(info, restarting)
+        IncognitoState.active = (info?.imeOptions ?: 0) and EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING != 0
         onSizeMaybeUpdated()
         imeManager.onStartInput()
         latinIMELegacy.onStartInputView(info, restarting)
@@ -646,6 +649,7 @@ class LatinIME : InputMethodServiceCompose(), LatinIMELegacy.SuggestionStripCont
 
     override fun onFinishInput() {
         super.onFinishInput()
+        IncognitoState.active = false
         latinIMELegacy.onFinishInput()
         uixManager.onInputFinishing()
     }
