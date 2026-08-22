@@ -1,5 +1,7 @@
 package org.futo.voiceinput.shared.ggml
 
+import android.os.SystemClock
+import android.util.Log
 import com.k2fsa.sherpa.onnx.FeatureConfig
 import com.k2fsa.sherpa.onnx.OfflineModelConfig
 import com.k2fsa.sherpa.onnx.OfflineRecognizer
@@ -77,7 +79,33 @@ class ParakeetSherpa(
     private val engineConfig: ParakeetEngineConfig = ParakeetEngineConfig()
 ) : SpeechEngine {
 
-    private val recognizer: OfflineRecognizer
+    companion object {
+        private const val TAG = "ParakeetSherpa"
+    }
+
+    /**
+     * Dedicated recognizer for streaming partial decodes. Kept greedy_search so
+     * previews stay fast and the existing partial throttle remains valid.
+     */
+    private val greedyRecognizer: OfflineRecognizer
+
+    /**
+     * Dedicated recognizer for final utterance decodes. Uses modified_beam_search
+     * for improved accuracy; created once alongside [greedyRecognizer] because
+     * sherpa-onnx 1.13.6 builds the decoder object at recognizer construction
+     * time and SetConfig only updates the cached config struct, so per-decode
+     * method switching is not possible with a single instance.
+     *
+     * RAM trade-off: two recognizers each hold their own onnxruntime sessions for
+     * the encoder/decoder/joiner. The ~600MB Parakeet model footprint is
+     * approximately doubled in working memory (file-backed pages may be shared by
+     * the OS page cache, but session state and tensors are duplicated). We accept
+     * this cost because the only alternatives are (a) using beam search for
+     * partials, which breaks the partial latency budget, or (b) recreating the
+     * recognizer on every final decode, which adds multi-second init latency to
+     * each utterance end. The lesser evil is keeping both instances alive.
+     */
+    private val beamRecognizer: OfflineRecognizer
 
     @Volatile
     private var cancelled: Boolean = false
@@ -111,30 +139,50 @@ class ParakeetSherpa(
         val tokens = dir.listFiles()?.firstOrNull { it.isFile && it.name == "tokens.txt" }
             ?: throw InvalidParakeetModelException("missing tokens.txt in ${dir.absolutePath}")
 
-        val config = OfflineRecognizerConfig(
-            featConfig = FeatureConfig(
-                sampleRate = engineConfig.sampleRate,
-                featureDim = engineConfig.featureDim
+        val modelConfig = OfflineModelConfig(
+            transducer = OfflineTransducerModelConfig(
+                encoder = encoder.absolutePath,
+                decoder = decoder.absolutePath,
+                joiner = joiner.absolutePath
             ),
-            modelConfig = OfflineModelConfig(
-                transducer = OfflineTransducerModelConfig(
-                    encoder = encoder.absolutePath,
-                    decoder = decoder.absolutePath,
-                    joiner = joiner.absolutePath
-                ),
-                tokens = tokens.absolutePath,
-                numThreads = engineConfig.numThreads,
-                debug = false,
-                provider = "cpu",
-                modelType = engineConfig.modelType
-            ),
+            tokens = tokens.absolutePath,
+            numThreads = engineConfig.numThreads,
+            debug = false,
+            provider = "cpu",
+            modelType = engineConfig.modelType
+        )
+
+        val featConfig = FeatureConfig(
+            sampleRate = engineConfig.sampleRate,
+            featureDim = engineConfig.featureDim
+        )
+
+        val greedyConfig = OfflineRecognizerConfig(
+            featConfig = featConfig,
+            modelConfig = modelConfig,
             decodingMethod = "greedy_search"
         )
 
+        val beamConfig = OfflineRecognizerConfig(
+            featConfig = featConfig,
+            modelConfig = modelConfig,
+            decodingMethod = "modified_beam_search"
+        )
+
         try {
-            recognizer = OfflineRecognizer(assetManager = null, config = config)
+            greedyRecognizer = OfflineRecognizer(assetManager = null, config = greedyConfig)
         } catch (e: Throwable) {
-            throw InvalidParakeetModelException("OfflineRecognizer construction failed: ${e.message}")
+            throw InvalidParakeetModelException("greedy OfflineRecognizer construction failed: ${e.message}")
+        }
+
+        try {
+            beamRecognizer = OfflineRecognizer(assetManager = null, config = beamConfig)
+        } catch (e: Throwable) {
+            // Don't leak the already-constructed greedy recognizer if beam fails.
+            try {
+                greedyRecognizer.release()
+            } catch (re: Throwable) { Log.e(TAG, "greedy release after beam failure", re) }
+            throw InvalidParakeetModelException("beam OfflineRecognizer construction failed: ${e.message}")
         }
     }
 
@@ -175,14 +223,18 @@ class ParakeetSherpa(
 
         cancelled = false
 
-        val stream = recognizer.createStream()
+        val stream = beamRecognizer.createStream()
         try {
             stream.acceptWaveform(samples, engineConfig.sampleRate)
-            recognizer.decode(stream)
+
+            val decodeStartMs = SystemClock.elapsedRealtime()
+            beamRecognizer.decode(stream)
+            val decodeElapsedMs = SystemClock.elapsedRealtime() - decodeStartMs
+            Log.i(TAG, "final decode modified_beam_search took ${decodeElapsedMs}ms")
 
             if (cancelled) throw InferenceCancelledException()
 
-            val result = recognizer.getResult(stream).text.trim()
+            val result = beamRecognizer.getResult(stream).text.trim()
 
             if (cancelled) throw InferenceCancelledException()
 
@@ -192,7 +244,7 @@ class ParakeetSherpa(
 
             return@withContext result
         } finally {
-            stream.release()
+            try { stream.release() } catch (e: Throwable) { Log.e(TAG, "beam stream release failed", e) }
         }
     }
 
@@ -226,14 +278,14 @@ class ParakeetSherpa(
 
         val generationAtEntry = cancelGeneration
         try {
-            val stream = recognizer.createStream()
+            val stream = greedyRecognizer.createStream()
             try {
                 stream.acceptWaveform(samples, engineConfig.sampleRate)
-                recognizer.decode(stream)
+                greedyRecognizer.decode(stream)
 
                 if (cancelGeneration != generationAtEntry) return@withContext false
 
-                val result = recognizer.getResult(stream).text.trim()
+                val result = greedyRecognizer.getResult(stream).text.trim()
 
                 if (cancelGeneration != generationAtEntry) return@withContext false
 
@@ -243,7 +295,7 @@ class ParakeetSherpa(
 
                 return@withContext true
             } finally {
-                stream.release()
+                try { stream.release() } catch (e: Throwable) { Log.e(TAG, "greedy stream release failed", e) }
             }
         } finally {
             // The gate is released even if createStream() throws — a stuck gate
@@ -262,8 +314,11 @@ class ParakeetSherpa(
     override suspend fun close() = withContext(inferenceContext) {
         if (!closed) {
             try {
-                recognizer.release()
-            } catch (_: Throwable) { }
+                greedyRecognizer.release()
+            } catch (e: Throwable) { Log.e(TAG, "greedy release failed", e) }
+            try {
+                beamRecognizer.release()
+            } catch (e: Throwable) { Log.e(TAG, "beam release failed", e) }
         }
         closed = true
     }
