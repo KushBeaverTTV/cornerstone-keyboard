@@ -12,6 +12,7 @@ import okhttp3.MediaType.Companion.toMediaType
 import org.json.JSONObject
 import org.futo.inputmethod.latin.BuildConfig
 import org.futo.inputmethod.latin.uix.actions.AGENT_KEY_TOKEN
+import org.futo.inputmethod.latin.uix.actions.crashEndpointFromAgentKey
 import java.io.File
 import java.io.PrintWriter
 import java.io.StringWriter
@@ -27,7 +28,7 @@ import java.util.concurrent.TimeUnit
  */
 object CrashReporter : Thread.UncaughtExceptionHandler {
     private const val TAG = "CrashReporter"
-    private val CRASH_URL = "${BuildConfig.AGENT_KEY_ENDPOINT.removeSuffix("/agentkey")}/crash"
+    private val CRASH_URL = crashEndpointFromAgentKey(BuildConfig.AGENT_KEY_ENDPOINT)
 
     @Volatile private var appContext: Context? = null
     private var previousHandler: Thread.UncaughtExceptionHandler? = null

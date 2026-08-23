@@ -1,5 +1,9 @@
 package org.futo.inputmethod.latin.uix.actions
 
+import kotlinx.coroutines.withContext
+
+import org.futo.inputmethod.latin.BuildConfig
+
 import android.content.Intent
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -36,7 +40,6 @@ import org.futo.inputmethod.latin.uix.ENABLE_SOUND
 import org.futo.inputmethod.latin.uix.KeyboardManagerForAction
 import org.futo.inputmethod.latin.uix.PREFER_BLUETOOTH
 import org.futo.inputmethod.latin.uix.PersistentActionState
-import org.futo.inputmethod.latin.uix.POLISH_DICTATION_ONLINE
 import org.futo.inputmethod.latin.uix.ResourceHelper
 import org.futo.inputmethod.latin.uix.USE_PERSONAL_DICT
 import org.futo.inputmethod.latin.uix.USE_VAD_AUTOSTOP
@@ -64,7 +67,10 @@ import org.futo.voiceinput.shared.types.getLanguageFromWhisperString
 import org.futo.voiceinput.shared.ui.MicrophoneDeviceState
 import org.futo.voiceinput.shared.whisper.DecodingConfiguration
 import org.futo.voiceinput.shared.whisper.ModelManager
+import org.futo.voiceinput.shared.whisper.RecognizerHolder
 import org.futo.voiceinput.shared.whisper.MultiModelRunConfiguration
+import org.futo.voiceinput.shared.FinishPolicy
+import org.futo.voiceinput.shared.VoiceToAgent
 import java.util.Locale
 
 val SystemVoiceInputAction = Action(
@@ -104,7 +110,7 @@ fun NoModelInstalled(locale: Locale) {
 }
 
 class VoiceInputPersistentState(val manager: KeyboardManagerForAction) : PersistentActionState {
-    val modelManager = ModelManager(manager.getContext())
+    val modelManager = RecognizerHolder.get(manager.getContext())
     val soundPlayer = SoundPlayer(manager.getContext())
     val userDictionaryObserver = UserDictionaryObserver(manager.getContext())
 
@@ -114,11 +120,12 @@ class VoiceInputPersistentState(val manager: KeyboardManagerForAction) : Persist
     var lastCommittedVoiceText: String? = null
 
     override suspend fun cleanUp() {
-        modelManager.cleanUp()
+        // Keep the engine warm across sessions. Cancel in-flight work only.
+        modelManager.cancelAll()
     }
 
     override fun close() {
-        runBlocking { modelManager.cleanUp() }
+        modelManager.cancelAll()
         userDictionaryObserver.unregister()
     }
 }
@@ -153,7 +160,7 @@ private class VoiceInputActionWindow(
         shouldPlaySounds = enableSound
 
         return RecognizerViewSettings(
-            shouldShowInlinePartialResult = false,
+            shouldShowInlinePartialResult = FinishPolicy.SHOW_INLINE_PARTIALS,
             shouldShowVerboseFeedback = verboseFeedback,
             shouldAnimateBubble = animateBubble,
             modelRunConfiguration = MultiModelRunConfiguration(
@@ -245,7 +252,7 @@ private class VoiceInputActionWindow(
 
     override fun close(): CloseResult {
         inputTransaction.cancel()
-        runBlocking { initJob.cancelAndJoin() }
+        initJob.cancel()
         recognizerView.value?.cancel()
         state.modelManager.cancelAll()
         return CloseResult.Default
@@ -302,14 +309,42 @@ private class VoiceInputActionWindow(
             // Partials are never touched; this path is only for finished results.
             val offlineText = offlineProcessTranscript(afterVoiceCommands)
 
-            // Optional online polish: opt-in, default OFF, never blocks insertion.
-            val finalText = if (context.getSetting(POLISH_DICTATION_ONLINE)) {
-                polishDictationTranscript(context, offlineText)
-            } else {
-                offlineText
+            val routed = VoiceToAgent.parse(offlineText)
+            if (routed != null) {
+                handleVoiceToAgent(routed)
+                return@launch
             }
 
-            commitTranscript(finalText, result)
+            if (FinishPolicy.BLOCK_INSERT_ON_POLISH) {
+                throw IllegalStateException("BLOCK_INSERT_ON_POLISH must stay false")
+            }
+            commitTranscript(offlineText, result)
+        }
+    }
+
+    private suspend fun handleVoiceToAgent(cmd: VoiceToAgent.Command) {
+        context.setSetting(AGENT_KEY_AGENT, cmd.agentId)
+        if (cmd.rest.isBlank()) {
+            inputTransaction.updatePartial("")
+            inputTransaction.cancel()
+            manager.announce("Agent: ${agentDisplayName(cmd.agentId)}")
+            manager.closeActionWindow()
+            return
+        }
+        val token = context.getSetting(AGENT_KEY_TOKEN).ifBlank { BuildConfig.AGENT_KEY_TOKEN }
+        if (token.isBlank()) {
+            commitTranscript(cmd.rest, cmd.rest)
+            return
+        }
+        val result = withContext(Dispatchers.IO) {
+            postToAgent(cmd.rest, token, cmd.agentId)
+        }
+        when (result) {
+            is AgentResult.Success -> commitTranscript(result.text, result.text)
+            else -> {
+                manager.announce(agentResultMessage(result, agentDisplayName(cmd.agentId)))
+                commitTranscript(cmd.rest, cmd.rest)
+            }
         }
     }
 

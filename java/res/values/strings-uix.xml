@@ -717,4 +717,9 @@ Default is %1$s</string>
     <!-- Wave 2 daily-driver actions -->
     <string name="action_quick_clipboard_title">Quick Clipboard</string>
     <string name="action_text_expansion_title">Text Expansion</string>
+    <string name="action_device_title">Device</string>
+    <string name="settings_agents_title">Agents</string>
+    <string name="settings_agents_token_title">Agent token</string>
+    <string name="settings_agents_token_subtitle">Used for Kimi, Aurora, and Prima. Never sent to custom endpoints.</string>
 </resources>
+

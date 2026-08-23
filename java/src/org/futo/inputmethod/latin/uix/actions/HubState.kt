@@ -302,7 +302,68 @@ internal object ConversationThreads {
     /** Remove the newest turn (used when a request fails before answering). */
     @Synchronized
     fun dropLast(agentId: String) {
-        threads[agentId]?.removeLast()
+        // removeLastOrNull: an empty thread must be tolerated - double-failure
+        // paths can call this twice and removeLast would crash the hub window.
+        threads[agentId]?.removeLastOrNull()
+    }
+
+    private const val STORE = "hub-threads.json"
+
+    @Synchronized
+    fun persist(context: android.content.Context) {
+        try {
+            val arr = org.json.JSONArray()
+            threads.forEach { (id, queue) ->
+                val obj = org.json.JSONObject().put("id", id)
+                val turns = org.json.JSONArray()
+                queue.forEach { turn ->
+                    turns.put(
+                        org.json.JSONObject()
+                            .put("fromUser", turn.fromUser)
+                            .put("text", turn.text)
+                            .put("label", turn.label)
+                    )
+                }
+                obj.put("turns", turns)
+                arr.put(obj)
+            }
+            context.openFileOutput(STORE, android.content.Context.MODE_PRIVATE).use { out ->
+                out.write(arr.toString().toByteArray(Charsets.UTF_8))
+            }
+        } catch (e: Exception) {
+            android.util.Log.w("ConversationThreads", "persist failed", e)
+        }
+    }
+
+    @Synchronized
+    fun load(context: android.content.Context) {
+        if (threads.isNotEmpty()) return
+        try {
+            val file = context.getFileStreamPath(STORE)
+            if (!file.isFile || file.length() == 0L) return
+            val raw = context.openFileInput(STORE).bufferedReader().readText()
+            val arr = org.json.JSONArray(raw)
+            for (i in 0 until arr.length()) {
+                val obj = arr.optJSONObject(i) ?: continue
+                val id = obj.optString("id")
+                if (id.isBlank()) continue
+                val queue = ArrayDeque<ThreadTurn>()
+                val turns = obj.optJSONArray("turns") ?: continue
+                for (j in 0 until turns.length()) {
+                    val t = turns.optJSONObject(j) ?: continue
+                    queue.addLast(
+                        ThreadTurn(
+                            fromUser = t.optBoolean("fromUser"),
+                            text = t.optString("text"),
+                            label = t.optString("label")
+                        )
+                    )
+                }
+                if (queue.isNotEmpty()) threads[id] = queue
+            }
+        } catch (e: Exception) {
+            android.util.Log.w("ConversationThreads", "load failed", e)
+        }
     }
 
     /** Compact last-N transcript for the follow-up prompt. Null when empty. */

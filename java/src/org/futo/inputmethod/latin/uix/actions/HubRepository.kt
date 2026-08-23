@@ -110,7 +110,31 @@ import java.util.Locale
 
 // Hub status endpoint: same prototype host as DEFAULT_AGENT_ENDPOINT (Tailscale mesh,
 // cleartext allowed for this host only), but needs no auth token.
-private val AGENT_STATUS_ENDPOINT = "${BuildConfig.AGENT_KEY_ENDPOINT.removeSuffix("/agentkey")}/agents"
+/**
+ * Derive the roster endpoint from the configured Agent Key endpoint.
+ * Pure so the URL contract is unit-testable; never mutate a live URL by
+ * substring surgery at the use site. Tolerates trailing slashes and a
+ * missing /agentkey suffix.
+ */
+internal fun statusEndpointFromAgentKey(agentKeyEndpoint: String): String {
+    val base = agentKeyEndpoint.trim().trimEnd('/')
+        .removeSuffix("/agentkey")
+    return "$base/agents"
+}
+
+internal fun crashEndpointFromAgentKey(agentKeyEndpoint: String): String {
+    val base = agentKeyEndpoint.trim().trimEnd('/')
+        .removeSuffix("/agentkey")
+    return "$base/crash"
+}
+
+private val AGENT_STATUS_ENDPOINT = statusEndpointFromAgentKey(BuildConfig.AGENT_KEY_ENDPOINT)
+
+internal val statusHttpClient = OkHttpClient.Builder()
+    .connectTimeout(3, java.util.concurrent.TimeUnit.SECONDS)
+    .readTimeout(5, java.util.concurrent.TimeUnit.SECONDS)
+    .callTimeout(6, java.util.concurrent.TimeUnit.SECONDS)
+    .build()
 
 /**
  * GET the hub's agent roster. Returns null on any failure — callers treat null
@@ -120,7 +144,7 @@ private val AGENT_STATUS_ENDPOINT = "${BuildConfig.AGENT_KEY_ENDPOINT.removeSuff
 internal fun fetchAgentStatuses(): Map<String, AgentStatus>? {
     val request = Request.Builder().url(AGENT_STATUS_ENDPOINT).get().build()
     return try {
-        agentHttpClient.newCall(request).execute().use { response ->
+        statusHttpClient.newCall(request).execute().use { response ->
             if (!response.isSuccessful) return null
             val body = response.body?.string() ?: return null
             val agents = JSONObject(body).optJSONObject("agents") ?: return null
@@ -156,6 +180,13 @@ internal sealed class AgentResult {
 // `endpoint` defaults to the shared hub; custom agents pass their override URL.
 // `client` may be supplied to override the default long-timeout client (e.g. for
 // short-latency paths such as dictation polish).
+internal fun isForeignAgentEndpoint(endpoint: String): Boolean {
+    val custom = endpoint.trim()
+    val hub = DEFAULT_AGENT_ENDPOINT.trim()
+    if (custom.isEmpty() || hub.isEmpty()) return false
+    return custom.trimEnd('/') != hub.trimEnd('/')
+}
+
 internal fun postToAgent(
     draft: String,
     token: String,
@@ -163,6 +194,11 @@ internal fun postToAgent(
     endpoint: String = DEFAULT_AGENT_ENDPOINT,
     client: OkHttpClient = agentHttpClient
 ): AgentResult {
+    if (isForeignAgentEndpoint(endpoint)) {
+        // Custom hosts must not receive the hub Bearer.
+        Log.w("HubRepository", "refusing to send hub token to foreign endpoint")
+        return AgentResult.Http(403)
+    }
     val body = JSONObject().put("text", draft).put("agent", agent).toString()
         .toRequestBody("application/json; charset=utf-8".toMediaType())
     val request = Request.Builder()
@@ -191,6 +227,48 @@ internal fun postToAgent(
     } catch (e: Exception) {
         Log.w("HubRepository", "agent request failed", e)
         AgentResult.Network
+    }
+}
+
+/**
+ * User-facing message for one AgentResult, keyed off the sealed result: each
+ * failure class names the action that can actually fix it instead of leaving
+ * the user guessing (extends the Sprint-3 mapping; 401/403 now point at
+ * 'agent_key_token', network points at Wi-Fi/Tailscale). Pure + top-level so
+ * the wording contract is unit-testable without constructing the hub window.
+ */
+internal fun agentResultMessage(result: AgentResult, agentName: String): String = when (result) {
+    is AgentResult.Success -> result.text
+    AgentResult.Timeout -> "$agentName timed out — the server is still working or unreachable; try again shortly"
+    is AgentResult.Http ->
+        if (result.code == 401 || result.code == 403)
+            "$agentName rejected the auth token — update 'agent_key_token' in settings"
+        else if (result.code in 500..599)
+            "$agentName hit a server error (${result.code}) — retry in a moment"
+        else
+            "$agentName request rejected (HTTP ${result.code})"
+    AgentResult.Parse -> "Couldn't read $agentName's reply — check the hub server logs"
+    AgentResult.Network -> "$agentName's server unreachable — check Wi-Fi/Tailscale, then retry"
+}
+
+/**
+ * Mirror of the build-time gate in build.gradle: a plain-http endpoint is only
+ * usable when its host is explicitly allowlisted for cleartext in
+ * network_security_config.xml; Android permits https to any host regardless.
+ * The Gradle gate fails the build on violation; this predicate documents and
+ * unit-tests the same contract. Keep the two in sync.
+ */
+internal fun isCleartextPairingValid(endpoint: String, allowlistedDomains: Set<String>): Boolean {
+    val trimmed = endpoint.trim()
+    if (trimmed.isEmpty()) return true // public builds ship without an endpoint
+    val scheme = trimmed.substringBefore("://", "").lowercase()
+    return when (scheme) {
+        "https" -> true
+        "http" -> {
+            val host = trimmed.substringAfter("://").substringBefore('/').substringBefore(':').lowercase()
+            host.isNotEmpty() && allowlistedDomains.any { it.lowercase() == host }
+        }
+        else -> false // missing/unknown scheme can't be paired safely
     }
 }
 

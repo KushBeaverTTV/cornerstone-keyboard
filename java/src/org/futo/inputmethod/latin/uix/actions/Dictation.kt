@@ -188,20 +188,24 @@ import java.util.Locale
                     modelManager = dictationModelManager
                 )
             } catch (e: ModelDoesNotExistException) {
-                dictationModelMissing = true
+                withContext(Dispatchers.Main) { dictationModelMissing = true }
                 return@launch
             }
 
-            // teardownDictation() may have cancelled us while the recognizer was
-            // being built; don't hand the stale view to the panel.
             if (!isActive) {
                 view.cancel()
                 return@launch
             }
 
-            dictationView = view
-            view.reset()
-            view.start()
+            withContext(Dispatchers.Main) {
+                if (!isActive) {
+                    view.cancel()
+                    return@withContext
+                }
+                dictationView = view
+                view.reset()
+                view.start()
+            }
         }
     }
     internal fun AgentHubWindow.cancelDictation() {
@@ -226,7 +230,7 @@ import java.util.Locale
             .toSet()
 
         return RecognizerViewSettings(
-            shouldShowInlinePartialResult = false,
+            shouldShowInlinePartialResult = org.futo.voiceinput.shared.FinishPolicy.SHOW_INLINE_PARTIALS,
             shouldShowVerboseFeedback = false,
             shouldAnimateBubble = context.getSetting(ANIMATE_BUBBLE),
             modelRunConfiguration = MultiModelRunConfiguration(

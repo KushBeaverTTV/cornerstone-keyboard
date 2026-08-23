@@ -63,6 +63,12 @@ val HomeScreenLite = UserSettingsMenu(
         ),
 
         userSettingNavigationItem(
+            title = R.string.settings_agents_title,
+            style = NavigationItemStyle.HomePrimary,
+            navigateTo = "agents",
+            icon = R.drawable.agent
+        ),
+        userSettingNavigationItem(
             title = R.string.settings_keyboard_typing_title,
             style = NavigationItemStyle.HomeSecondary,
             navigateTo = "keyboardAndTyping",

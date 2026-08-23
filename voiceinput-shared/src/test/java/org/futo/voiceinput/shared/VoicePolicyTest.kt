@@ -122,4 +122,94 @@ class VoicePolicyTest {
         // recognizer treats the cap as reached and finishes instead.
         assertTrue(BufferGrowth.nextCapacity(BufferGrowth.MAX_CAPACITY) > BufferGrowth.MAX_CAPACITY)
     }
+    @Test
+    fun finishPolicy_showsInlinePartials() {
+        assertTrue(FinishPolicy.SHOW_INLINE_PARTIALS)
+    }
+
+    @Test
+    fun finishPolicy_hidesPinwheelWhenPartialExists() {
+        assertFalse(FinishPolicy.shouldShowPinwheel(hasUsablePartial = true))
+    }
+
+    @Test
+    fun finishPolicy_showsPinwheelWhenNoPartial() {
+        assertTrue(FinishPolicy.shouldShowPinwheel(hasUsablePartial = false))
+    }
+
+    @Test
+    fun finishPolicy_finalDecodingMethod_isGreedy() {
+        assertEquals("greedy_search", FinishPolicy.FINAL_DECODING_METHOD)
+    }
+
+    @Test
+    fun finishPolicy_doesNotBlockInsertOnPolish() {
+        assertFalse(FinishPolicy.BLOCK_INSERT_ON_POLISH)
+    }
+
+    @Test
+    fun finishPolicy_commitText_prefersLastPartialWhenFinalBlank() {
+        assertEquals("hello world", FinishPolicy.commitText(lastPartial = "hello world", finalText = ""))
+        assertEquals("hello world", FinishPolicy.commitText(lastPartial = "hello world", finalText = "   "))
+    }
+
+    @Test
+    fun finishPolicy_commitText_prefersFinalWhenPresent() {
+        assertEquals("final cut", FinishPolicy.commitText(lastPartial = "hello", finalText = "final cut"))
+    }
+
+    @Test
+    fun finishPolicy_commitText_blankWhenNothingAvailable() {
+        assertEquals("", FinishPolicy.commitText(lastPartial = "", finalText = ""))
+        assertEquals("", FinishPolicy.commitText(lastPartial = "   ", finalText = "\n"))
+    }
+
+    @Test
+    fun finishPolicy_shouldCommitPartialImmediately_whenPartialExists() {
+        assertTrue(FinishPolicy.shouldCommitPartialImmediately(lastPartial = "hello"))
+        assertFalse(FinishPolicy.shouldCommitPartialImmediately(lastPartial = ""))
+        assertFalse(FinishPolicy.shouldCommitPartialImmediately(lastPartial = "  "))
+    }
+
+    @Test
+    fun chunkDecode_shortBuffer_isFull() {
+        val slice = ChunkDecodePolicy.slice(sampleCount = 16000, lastFullAt = 0)
+        assertEquals(0, slice.start)
+        assertTrue(slice.isFull)
+    }
+
+    @Test
+    fun chunkDecode_longBufferBetweenRefresh_isWindowed() {
+        val count = ChunkDecodePolicy.WINDOW_SAMPLES + 16000
+        val slice = ChunkDecodePolicy.slice(sampleCount = count, lastFullAt = count - 16000)
+        assertEquals(count - ChunkDecodePolicy.WINDOW_SAMPLES, slice.start)
+        assertFalse(slice.isFull)
+    }
+
+    @Test
+    fun chunkDecode_longBufferDueForRefresh_isFull() {
+        val count = ChunkDecodePolicy.FULL_REFRESH_SAMPLES + 16000
+        val slice = ChunkDecodePolicy.slice(sampleCount = count, lastFullAt = 0)
+        assertEquals(0, slice.start)
+        assertTrue(slice.isFull)
+    }
+
+    @Test
+    fun voiceToAgent_parsesHeyKimi() {
+        val cmd = VoiceToAgent.parse("hey kimi improve this draft")
+        assertEquals("kimi", cmd!!.agentId)
+        assertEquals("improve this draft", cmd.rest)
+    }
+
+    @Test
+    fun voiceToAgent_switchOnly() {
+        val cmd = VoiceToAgent.parse("Hey Aurora")
+        assertEquals("aurora", cmd!!.agentId)
+        assertEquals("", cmd.rest)
+    }
+
+    @Test
+    fun voiceToAgent_ignoresNormalSpeech() {
+        assertEquals(null, VoiceToAgent.parse("hey there how are you"))
+    }
 }

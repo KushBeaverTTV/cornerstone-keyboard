@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Agent Key prototype: the VPS endpoint lives on the Tailscale mesh and is
-     reached over plain HTTP (the mesh itself is encrypted). Permit cleartext
-     for that host ONLY; everything else stays blocked. -->
+<!-- Cleartext is denied by default. The host below is a placeholder; the
+     Gradle F-5 gate fails the build if AGENT_KEY_ENDPOINT is http:// and
+     its host is not listed here. Put the real Tailscale hostname in this
+     allowlist when pairing a mesh endpoint via local.properties. -->
 <network-security-config>
     <base-config cleartextTrafficPermitted="false" />
     <domain-config cleartextTrafficPermitted="true">

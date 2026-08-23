@@ -46,6 +46,7 @@ val AllActionsMap = mapOf(
     // Wave 2 additions: append-only, indices above must stay stable
     "quick_clipboard" to QuickClipboardAction,
     "text_expansion" to TextExpansionAction,
+    "device" to DeviceAction,
 )
 
 val ActionToId = AllActionsMap.entries.associate { it.value to it.key }

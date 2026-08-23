@@ -118,6 +118,8 @@ class AudioRecognizer(
     // accumulated audio is re-decoded every PARTIAL_DECODE_INTERVAL_MS on the
     // inference thread and pushed through the normal partialResult callback.
     private var lastPartialDecodeAtMs = 0L
+    @Volatile private var lastHeardPartial: String = ""
+    @Volatile private var lastFullDecodeAtSamples: Int = 0
 
     // A failing partial decode must never crash or degrade the final decode —
     // one failure disables partials for the rest of this recording session.
@@ -532,14 +534,21 @@ class AudioRecognizer(
 
         lastPartialDecodeAtMs = now
 
-        // Snapshot: floatSamples is only mutated on this thread, so the position
-        // read and the copy are race-free here.
-        val snapshot = floatSamples.array().sliceArray(0 until sampleCount)
+        val slice = ChunkDecodePolicy.slice(sampleCount, lastFullDecodeAtSamples)
+        val snapshot = floatSamples.array().sliceArray(slice.start until sampleCount)
+        val isFull = slice.isFull
 
         partialDecodeJob = lifecycleScope.launch(Dispatchers.Default) {
             try {
                 engine.inferPartial(snapshot) { text ->
-                    runnerCallback.partialResult(text)
+                    if (isFull) lastFullDecodeAtSamples = sampleCount
+                    // Windowed previews update the live strip only; lastHeardPartial
+                    // is reserved for full-buffer decodes so stop-to-commit stays complete.
+                    if (isFull) {
+                        runnerCallback.partialResult(text)
+                    } else if (text.isNotBlank()) {
+                        listener.partialResult(text)
+                    }
                 }
             } catch (e: Exception) {
                 // A partial is best-effort: log it, stop scheduling more, and let
@@ -606,6 +615,8 @@ class AudioRecognizer(
         // disabled them after a partial-decode failure).
         partialDecodesDisabled = false
         lastPartialDecodeAtMs = 0L
+        lastHeardPartial = ""
+        lastFullDecodeAtSamples = 0
 
         val device = try {
             createRecorderAndJob(settings.recordingConfiguration.preferBluetoothMic)
@@ -652,6 +663,7 @@ class AudioRecognizer(
 
         override fun partialResult(string: String) {
             if(isBlankResult(string)) return
+            lastHeardPartial = string
             listener.partialResult(string)
         }
     }
@@ -689,10 +701,7 @@ class AudioRecognizer(
             return
         }
 
-        val text = when {
-            isBlankResult(outputText) -> ""
-            else -> outputText
-        }
+        val text = FinishPolicy.commitText(lastHeardPartial, outputText)
 
         yield()
         lifecycleScope.launch {
@@ -713,7 +722,18 @@ class AudioRecognizer(
         isRecording = false
         recorder?.stop()
 
-        listener.processing()
+        val readyPartial = lastHeardPartial
+        if (FinishPolicy.shouldCommitPartialImmediately(readyPartial)) {
+            // Bubble contract: text already on screen. Do not pinwheel or
+            // re-decode the whole buffer just to replace it.
+            listener.finished(readyPartial)
+            lifecycleScope.launch(Dispatchers.Default) { releaseBuffer() }
+            return
+        }
+
+        if (FinishPolicy.shouldShowPinwheel(hasUsablePartial = false)) {
+            listener.processing()
+        }
 
         modelJob = lifecycleScope.launch {
             withContext(Dispatchers.Default) {

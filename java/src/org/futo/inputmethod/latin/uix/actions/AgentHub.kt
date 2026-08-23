@@ -99,6 +99,7 @@ import org.futo.voiceinput.shared.types.getLanguageFromWhisperString
 import org.futo.voiceinput.shared.ui.MicrophoneDeviceState
 import org.futo.voiceinput.shared.whisper.DecodingConfiguration
 import org.futo.voiceinput.shared.whisper.ModelManager
+import org.futo.voiceinput.shared.whisper.RecognizerHolder
 import org.futo.voiceinput.shared.whisper.MultiModelRunConfiguration
 import java.util.Locale
 
@@ -151,11 +152,12 @@ internal class AgentHubWindow(
     internal var dictationView by mutableStateOf<RecognizerView?>(null)
     internal var dictationModelMissing by mutableStateOf(false)
     internal var dictationInitJob: Job? = null
+    internal var promptJob: Job? = null
     internal var dictationAgentId: String? = null
 
     // One ModelManager per window open — the same role VoiceInputPersistentState's
     // modelManager plays for voice typing. Released in close().
-    internal val dictationModelManager = ModelManager(context)
+    internal val dictationModelManager = RecognizerHolder.get(context)
 
     internal fun agentName(id: String): String =
         statuses?.get(id)?.name
@@ -166,7 +168,7 @@ internal class AgentHubWindow(
 
     // Never read or send password field contents — same guard as the old tap behavior.
     internal val isPasswordContext: Boolean
-        get() = manager.getLatinIMEForDebug().currentInputEditorInfo
+        get() = manager.getCurrentEditorInfo()
             ?.let { isPasswordField(it.inputType) } == true
 
     // Private/incognito fields (browser private mode, lockdown apps) are treated
@@ -186,6 +188,7 @@ internal class AgentHubWindow(
 
         // Fetch agent statuses once per window open, off the UI thread.
         LaunchedEffect(Unit) {
+            ConversationThreads.load(context)
             scope.launch(Dispatchers.IO) {
                 val result = fetchAgentStatuses()
                 withContext(Dispatchers.Main) {
@@ -443,7 +446,7 @@ internal class AgentHubWindow(
 
         val token = agentToken()
         if (token.isBlank()) {
-            detailState = DetailState.Hint("Agent token is not set. Configure the 'agent_key_token' setting.")
+            detailState = DetailState.Hint("Agent token is not set. Open Settings → Agents.")
             return
         }
 
@@ -456,21 +459,17 @@ internal class AgentHubWindow(
         }
 
         detailState = DetailState.Thinking
-        manager.getLifecycleScope().launch(Dispatchers.IO) {
+        promptJob?.cancel()
+        promptJob = manager.getLifecycleScope().launch(Dispatchers.IO) {
             // The composed prompt IS the text — postToAgent takes the full string.
             // A custom agent's system prompt goes first (it's the standing
             // instruction), then the live thread so follow-ups continue the real
             // conversation, then AgentMemory for older summary context.
             val custom = customAgent(request.agentId)
             val threadContext = ConversationThreads.contextBlock(request.agentId)
-            val memoryContext = AgentMemory.contextBlock(request.agentId)
             val prompt = buildString {
                 if (custom != null && custom.systemPrompt.isNotBlank()) {
                     append(custom.systemPrompt)
-                    append("\n\n")
-                }
-                if (memoryContext != null) {
-                    append(memoryContext)
                     append("\n\n")
                 }
                 if (threadContext != null) {
@@ -491,7 +490,7 @@ internal class AgentHubWindow(
                 when (result) {
                     is AgentResult.Success -> {
                         lastAnswerRequest = request
-                        AgentMemory.record(request.agentId, request.label, request.userText, result.text)
+                        ConversationThreads.persist(context)
                         if (recordUser.not()) {
                             // Regenerate: swap the previous agent/error bubble for the new answer.
                             ConversationThreads.replaceLastAgentTurn(request.agentId, result.text)
@@ -527,6 +526,7 @@ internal class AgentHubWindow(
                             )
                         }
                         threadVersion++
+                        ConversationThreads.persist(context)
                         detailState = DetailState.Thread
                     }
                 }
@@ -534,12 +534,10 @@ internal class AgentHubWindow(
         }
     }
 
-    internal fun agentResultMessage(result: AgentResult, agentName: String): String = when (result) {
-        is AgentResult.Success -> result.text
-        AgentResult.Timeout -> "Timed out — the agent server didn't answer in time"
-        is AgentResult.Http -> "Server error (HTTP ${result.code})"
-        AgentResult.Parse -> "Couldn't read the agent's reply"
-        AgentResult.Network -> "Can't reach the agent server"
+    internal fun cancelInFlightPrompt() {
+        promptJob?.cancel()
+        promptJob = null
+        detailState = DetailState.Thread
     }
 
     internal fun insertAnswer(answer: String) {
@@ -559,6 +557,16 @@ internal class AgentHubWindow(
      * window keeps the keyboard open, so mid-request edits are unlikely.
      */
     internal fun replaceDraftWith(answer: String, draftDeleteCount: Int) {
+        val transaction = manager.createInputTransaction()
+        val before = transaction.textContext.beforeCursor?.toString().orEmpty()
+        transaction.cancel()
+        val actual = before.codePointCount(0, before.length)
+        if (draftDeleteCount <= 0 || actual < draftDeleteCount) {
+            manager.announce("Field changed — inserting instead")
+            manager.typeText(answer)
+            manager.closeActionWindow()
+            return
+        }
         manager.backspace(draftDeleteCount)
         manager.typeText(answer)
         manager.closeActionWindow()
@@ -631,13 +639,15 @@ internal class AgentHubWindow(
 
     override fun close(): CloseResult {
         teardownDictation()
+        promptJob?.cancel()
+        promptJob = null
         // Never leave the flashlight burning after the keyboard goes away —
         // the hub owns the toggle, so it owns the cleanup.
         if (torchOn) {
             setTorch(context, false)
             torchOn = false
         }
-        manager.getLifecycleScope().launch(Dispatchers.IO + NonCancellable) { dictationModelManager.cleanUp() }
+        dictationModelManager.cancelAll()
         return CloseResult.Default
     }
 

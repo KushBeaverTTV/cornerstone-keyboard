@@ -48,7 +48,7 @@ val AUDIO_FOCUS = SettingsKey(
 // Users who want it can re-enable in Voice Input settings.
 val USE_VAD_AUTOSTOP = SettingsKey(
     key = booleanPreferencesKey("use_vad_autostop"),
-    default = false
+    default = true
 )
 
 val ENGLISH_MODEL_INDEX = SettingsKey(

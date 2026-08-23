@@ -118,6 +118,8 @@ interface KeyboardManagerForAction {
     fun getCurrentIME(): IMEInterface
 
     fun isIncognitoContext(): Boolean
+
+    fun getCurrentEditorInfo(): android.view.inputmethod.EditorInfo?
 }
 
 enum class CloseResult {

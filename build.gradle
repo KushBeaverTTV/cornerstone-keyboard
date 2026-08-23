@@ -254,6 +254,39 @@ android {
     final def agentKeyEndpoint = kbpLocalProps.getProperty("AGENT_KEY_ENDPOINT", "")
     final def modelMirrorUrl = kbpLocalProps.getProperty("MODEL_MIRROR_URL", "")
 
+    // KBP F-5: pair the injected endpoint with the cleartext allowlist. An
+    // http:// endpoint whose host is not exempted in the network security
+    // config would have every request killed by Android at runtime behind a
+    // generic error - fail the build here instead, with the fix in the
+    // message. https endpoints are exempt (Android allows TLS to any host).
+    // Keep in sync with isCleartextPairingValid() in HubRepository.kt
+    // (unit-tested in AgentHubLogicTest).
+    if (!agentKeyEndpoint.trim().isEmpty()) {
+        try {
+            final def kbpEpUrl = new URL(agentKeyEndpoint.trim())
+            if (kbpEpUrl.protocol == 'http') {
+                final def kbpNscFile = rootProject.file("java/res/xml/network_security_config.xml")
+                final def kbpDomains = []
+                if (kbpNscFile.exists()) {
+                    (kbpNscFile.text =~ /<domain[^>]*>([^<]+)<\/domain>/).each { g ->
+                        kbpDomains << g[1].trim().toLowerCase()
+                    }
+                }
+                final def kbpHost = (kbpEpUrl.host ?: '').toLowerCase()
+                if (!(kbpHost in kbpDomains)) {
+                    throw new GradleException(
+                        "AGENT_KEY_ENDPOINT uses plain http:// but host '" + kbpHost +
+                        "' is not allowlisted for cleartext (allowlist: " +
+                        (kbpDomains.isEmpty() ? '<empty>' : kbpDomains.join(', ')) +
+                        "). Add it to java/res/xml/network_security_config.xml or use https://."
+                    )
+                }
+            }
+        } catch (MalformedURLException e) {
+            throw new GradleException("AGENT_KEY_ENDPOINT is not a valid URL: '" + agentKeyEndpoint.trim() + "'")
+        }
+    }
+
 
     buildTypes {
         debug {
@@ -338,6 +371,12 @@ android {
         coreLibraryDesugaringEnabled true
         sourceCompatibility JavaVersion.VERSION_1_8
         targetCompatibility JavaVersion.VERSION_1_8
+    }
+
+    testOptions {
+        unitTests {
+            returnDefaultValues = true
+        }
     }
 
     sourceSets {
@@ -477,6 +516,8 @@ dependencies {
     debugImplementation 'androidx.compose.ui:ui-test-manifest'
 
     testImplementation 'junit:junit:4.13.2'
+    // KBP: real org.json for JVM unit tests (Android stubs throw NPE on put()).
+    testImplementation 'org.json:json:20240303'
     androidTestImplementation "org.mockito:mockito-core:1.9.5"
     androidTestImplementation 'com.google.dexmaker:dexmaker:1.2'
     androidTestImplementation 'com.google.dexmaker:dexmaker-mockito:1.2'

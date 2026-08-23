@@ -13,7 +13,7 @@ import org.futo.inputmethod.latin.uix.getSetting
 import org.futo.voiceinput.shared.text.OfflineTextProcessor
 import java.util.concurrent.TimeUnit
 
-private const val POLISH_DICTATION_AGENT = "kimi"
+private const val POLISH_DICTATION_AGENT_FALLBACK = "kimi"
 private const val POLISH_PROMPT_PREFIX =
     "Restore punctuation and capitalization. Output ONLY the corrected text, nothing else:"
 
@@ -57,7 +57,7 @@ suspend fun polishDictationTranscript(context: Context, offlineText: String): St
                 postToAgent(
                     draft = draft,
                     token = token,
-                    agent = POLISH_DICTATION_AGENT,
+                    agent = context.getSetting(AGENT_KEY_AGENT).ifBlank { POLISH_DICTATION_AGENT_FALLBACK },
                     client = dictationPolishHttpClient
                 )
             } ?: AgentResult.Timeout

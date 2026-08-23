@@ -550,6 +550,9 @@ class UixActionKeyboardManager(val uixManager: UixManager, val latinIME: LatinIM
     }
 
     override fun isIncognitoContext(): Boolean = IncognitoState.active
+
+    override fun getCurrentEditorInfo(): android.view.inputmethod.EditorInfo? =
+        latinIME.currentInputEditorInfo
 }
 
 data class ActiveDialogRequest(

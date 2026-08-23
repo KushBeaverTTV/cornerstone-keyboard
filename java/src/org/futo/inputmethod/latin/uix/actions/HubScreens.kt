@@ -78,6 +78,7 @@ import org.futo.inputmethod.latin.uix.PREFER_BLUETOOTH
 import org.futo.inputmethod.latin.uix.ResourceHelper
 import org.futo.inputmethod.latin.uix.USE_VAD_AUTOSTOP
 import org.futo.inputmethod.latin.uix.getSetting
+import org.futo.inputmethod.latin.uix.setSetting
 import org.futo.inputmethod.latin.uix.setSettingBlocking
 import org.futo.inputmethod.latin.uix.settings.SettingsActivity
 import android.view.KeyEvent
@@ -101,6 +102,7 @@ import java.util.Locale
 
     @Composable
     internal fun AgentHubWindow.HubTiles(onSelect: (String) -> Unit) {
+        val scope = rememberCoroutineScope()
         Column(modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
             Text(
                 "Agent Hub",
@@ -117,7 +119,7 @@ import java.util.Locale
 
             if (!hubOnboarded) {
                 OnboardingCard(onDismiss = {
-                    context.setSettingBlocking(HUB_ONBOARDED.key, true)
+                    scope.launch { context.setSetting(HUB_ONBOARDED, true) }
                     hubOnboarded = true
                 })
                 Spacer(modifier = Modifier.height(12.dp))
@@ -536,6 +538,8 @@ import java.util.Locale
                 trackColor = MaterialTheme.colorScheme.outlineVariant,
                 modifier = Modifier.width(120.dp)
             )
+            Spacer(modifier = Modifier.height(16.dp))
+            HubChip(text = "Cancel", onClick = { cancelInFlightPrompt() }, modifier = Modifier.fillMaxWidth())
         }
     }
     internal fun AgentHubWindow.detailSubtitle(agentId: String, status: AgentStatus?): String {
@@ -634,14 +638,13 @@ import java.util.Locale
                 Spacer(modifier = Modifier.height(12.dp))
                 HubCard(accentColor = MaterialTheme.colorScheme.error) {
                     Text(
-                        "Agent token is not set. Configure the 'agent_key_token' setting to use the agent.",
+                        "Agent token is not set. Open Settings → Agents to set the token.",
                         fontSize = 14.sp,
                         color = MaterialTheme.colorScheme.error
                     )
                 }
             }
 
-            DeviceActionsSection(agentId)
         }
     }
     @Composable
@@ -768,7 +771,7 @@ import java.util.Locale
             } else if (tokenMissing) {
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
-                    "Agent token is not set. Configure the 'agent_key_token' setting to use the agent.",
+                    "Agent token is not set. Open Settings → Agents to set the token.",
                     fontSize = 13.sp,
                     color = MaterialTheme.colorScheme.error
                 )
