@@ -166,6 +166,16 @@ class OnDeviceCorrectionTest {
     }
 
     @Test
+    fun `prompt carries the product glossary and the manual chat template`() {
+        val prompt = OnDeviceCorrection.wrapPrompt("the quinn v six checkpoint passed")
+        assertTrue(prompt.startsWith("<|im_start|>user\n"))
+        assertTrue(prompt.contains("Raw: the quinn v six checkpoint passed\nResult:"))
+        for (term in listOf("Qwen", "V6", "Parakeet", "Razr", "NVIDIA", "GGUF", "LoRA", "sherpa-onnx")) {
+            assertTrue("glossary term missing: $term", term in prompt)
+        }
+    }
+
+    @Test
     fun `generation owner rejects a second in-flight launch and invalidates on cancel`() {
         val owner = CorrectionGenerationOwner()
         val first = owner.tryBegin()

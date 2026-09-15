@@ -48,6 +48,9 @@ data class CorrectionLastRun(
 
 private const val INSTRUCTION =
     "Correct this keyboard/dictation text. Preserve names, profanity, intent, and voice. " +
+        "When the context means the product or project, use these exact spellings: " +
+        "Qwen, V6, Parakeet, Cornerstone Voice, Cornerstone Keyboard, Razr, NVIDIA, " +
+        "GGUF, LoRA, sherpa-onnx. Otherwise keep the ordinary word. " +
         "Return only compact JSON with exactly this schema: " +
         "{\"prediction\":\"corrected text\",\"uncertain\":[\"term needing review\"]}. " +
         "Use an empty uncertain list when no review is needed."
