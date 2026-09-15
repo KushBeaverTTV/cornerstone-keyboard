@@ -101,7 +101,7 @@ class OnDeviceCorrectionTest {
     }
 
     @Test
-    fun `semantic substitutions are surfaced for review`() {
+    fun `semantic substitutions fail closed`() {
         val result = CorrectionPolicy.decide(
             enabled = true,
             raw = "send it to the cravenport account",
@@ -109,8 +109,102 @@ class OnDeviceCorrectionTest {
             timedOut = false,
             generation = 6L,
             currentGeneration = 6L,
+        )
+        assertEquals(CorrectionOutcome.Unchanged("paraphrase"), result)
+    }
+
+    @Test
+    fun `paraphrased verbs fail closed`() {
+        val result = CorrectionPolicy.decide(
+            enabled = true,
+            raw = "choose predictive text and check the current option",
+            modelOutput = """{"prediction":"Choose Predictive Text and select Current.","uncertain":[]}""",
+            timedOut = false,
+            generation = 13L,
+            currentGeneration = 13L,
+        )
+        assertEquals(CorrectionOutcome.Unchanged("paraphrase"), result)
+    }
+
+    @Test
+    fun `dropped product suffixes fail closed`() {
+        val result = CorrectionPolicy.decide(
+            enabled = true,
+            raw = "cornerstone keyboard is running on my motorola razor plus",
+            modelOutput = """{"prediction":"Cornerstone Keyboard runs on my Motorola Razr.","uncertain":[]}""",
+            timedOut = false,
+            generation = 14L,
+            currentGeneration = 14L,
+        )
+        assertEquals(CorrectionOutcome.Unchanged("paraphrase"), result)
+    }
+
+    @Test
+    fun `inserted content words fail closed`() {
+        val result = CorrectionPolicy.decide(
+            enabled = true,
+            raw = "she sells sea shells",
+            modelOutput = """{"prediction":"She sells sea shells by the seashore.","uncertain":[]}""",
+            timedOut = false,
+            generation = 15L,
+            currentGeneration = 15L,
+        )
+        assertEquals(CorrectionOutcome.Unchanged("inserted"), result)
+    }
+
+    @Test
+    fun `invented digits fail closed`() {
+        val result = CorrectionPolicy.decide(
+            enabled = true,
+            raw = "download six hundred and sixty one megabytes",
+            modelOutput = """{"prediction":"Download 610 megabytes.","uncertain":[]}""",
+            timedOut = false,
+            generation = 16L,
+            currentGeneration = 16L,
+        )
+        assertEquals(CorrectionOutcome.Unchanged("numbers"), result)
+    }
+
+    @Test
+    fun `spoken digit sequences may be normalized`() {
+        val result = CorrectionPolicy.decide(
+            enabled = true,
+            raw = "the reference number is seven four zero nine two six",
+            modelOutput = """{"prediction":"The reference number is 740926.","uncertain":[]}""",
+            timedOut = false,
+            generation = 17L,
+            currentGeneration = 17L,
+        )
+        assertEquals(
+            CorrectionOutcome.Applied("The reference number is 740926.", listOf("number wording", "changed 'seven'")),
+            result,
+        )
+    }
+
+    @Test
+    fun `correct quantity normalization is allowed`() {
+        val result = CorrectionPolicy.decide(
+            enabled = true,
+            raw = "download six hundred and sixty one megabytes",
+            modelOutput = """{"prediction":"Download 661 megabytes.","uncertain":[]}""",
+            timedOut = false,
+            generation = 18L,
+            currentGeneration = 18L,
         ) as CorrectionOutcome.Applied
-        assertTrue(result.uncertain.any { "cravenport" in it })
+        assertEquals("Download 661 megabytes.", result.prediction)
+    }
+
+    @Test
+    fun `glossary swaps remain allowed`() {
+        val result = CorrectionPolicy.decide(
+            enabled = true,
+            raw = "the quinn checkpoint passed",
+            modelOutput = """{"prediction":"The Qwen checkpoint passed.","uncertain":[]}""",
+            timedOut = false,
+            generation = 19L,
+            currentGeneration = 19L,
+        ) as CorrectionOutcome.Applied
+        assertEquals("The Qwen checkpoint passed.", result.prediction)
     }
 
     @Test

@@ -29,6 +29,22 @@ object CorrectionPolicy {
         "a", "an", "and", "are", "as", "at", "be", "for", "from", "i", "in", "is", "it", "of", "on",
         "or", "that", "the", "this", "to", "was", "with", "you",
     )
+    private val digitWords = mapOf(
+        "zero" to "0", "oh" to "0", "one" to "1", "two" to "2", "three" to "3", "four" to "4",
+        "five" to "5", "six" to "6", "seven" to "7", "eight" to "8", "nine" to "9",
+    )
+    private val numberValues = mapOf(
+        "ten" to 10L, "eleven" to 11L, "twelve" to 12L, "thirteen" to 13L, "fourteen" to 14L,
+        "fifteen" to 15L, "sixteen" to 16L, "seventeen" to 17L, "eighteen" to 18L, "nineteen" to 19L,
+        "twenty" to 20L, "thirty" to 30L, "forty" to 40L, "fifty" to 50L, "sixty" to 60L,
+        "seventy" to 70L, "eighty" to 80L, "ninety" to 90L,
+    )
+    private val numberScales = mapOf("hundred" to 100L, "thousand" to 1_000L, "million" to 1_000_000L)
+    private val numberLinkers = setOf("and", "point")
+    private val glossaryTokens = setOf(
+        "qwen", "parakeet", "razr", "nvidia", "gguf", "lora", "sherpa", "onnx", "rocm", "cornerstone",
+    )
+    private val digitsOnly = Regex("\\d+")
 
     fun decide(
         enabled: Boolean,
@@ -62,6 +78,8 @@ object CorrectionPolicy {
         if (rawDigits.isNotEmpty() && rawDigits != Regex("\\d+").findAll(parsed.prediction).map { it.value }.toList()) {
             return CorrectionOutcome.Unchanged("numbers")
         }
+        val rewriteViolation = unsanctionedRewrite(raw, parsed.prediction)
+        if (rewriteViolation != null) return CorrectionOutcome.Unchanged(rewriteViolation)
 
         val uncertainty = linkedSetOf<String>()
         parsed.uncertain.mapTo(uncertainty) { it.trim() }
@@ -74,6 +92,83 @@ object CorrectionPolicy {
             parsed.prediction,
             uncertainty.filter { it.isNotBlank() }.distinct().take(5),
         )
+    }
+
+    private fun unsanctionedRewrite(raw: String, prediction: String): String? {
+        val after = token.findAll(prediction.lowercase()).map { it.value }.toMutableList()
+        val removed = mutableListOf<String>()
+        for (word in token.findAll(raw.lowercase()).map { it.value }) {
+            val exact = after.indexOf(word)
+            if (exact >= 0) after.removeAt(exact) else removed += word
+        }
+        val added = after.toList()
+
+        val spokenNumbers = removed.filter(::isNumberWord)
+        val numbersConsumed = spokenNumbers.any { it !in numberLinkers }
+        if (numbersConsumed) {
+            val spoken = encodeNumberWords(spokenNumbers) ?: return "numbers"
+            val digitTokens = added.filter(::isDigitCarrier)
+            val written = digitTokens.joinToString("") { t -> t.filter(Char::isDigit) }
+            if (spoken != written) return "numbers"
+        } else if (added.any { digitsOnly.matches(it) }) {
+            return "numbers"
+        }
+
+        val addedPool = added.toMutableList()
+        if (numbersConsumed) added.filter(::isDigitCarrier).forEach(addedPool::remove)
+        val removedContent = removed.filterNot(::isNumberWord)
+        val swapGlossary = addedPool
+            .filter { it in glossaryTokens && removedContent.none { old -> editDistance(it, old) <= 2 } }
+            .toMutableList()
+        for (word in removedContent) {
+            if (word.length < 4 || word in lexicalStopWords) continue
+            if (addedPool.any { editDistance(word, it) <= 2 }) continue
+            val swap = swapGlossary.firstOrNull() ?: return "paraphrase"
+            swapGlossary.remove(swap)
+            addedPool.remove(swap)
+        }
+        for (word in addedPool) {
+            if (word.length < 4 || word in lexicalStopWords) continue
+            if (removed.none { editDistance(word, it) <= 2 }) return "inserted"
+        }
+        return null
+    }
+
+    private fun isNumberWord(word: String): Boolean =
+        word in digitWords || word in numberValues || word in numberScales || word in numberLinkers
+
+    private fun isDigitCarrier(word: String): Boolean =
+        digitsOnly.matches(word) || (word in glossaryTokens && word.any(Char::isDigit))
+
+    private fun encodeNumberWords(words: List<String>): String? {
+        if (words.all { it in digitWords }) {
+            return words.joinToString("") { digitWords.getValue(it) }
+        }
+        var total = 0L
+        var current = 0L
+        val fraction = StringBuilder()
+        var decimal = false
+        for (word in words) {
+            when {
+                word in digitWords -> {
+                    if (decimal) fraction.append(digitWords.getValue(word)) else current += digitWords.getValue(word).toLong()
+                }
+                word == "point" -> if (decimal) return null else decimal = true
+                word == "and" -> Unit
+                word in numberValues -> {
+                    if (decimal) return null
+                    current += numberValues.getValue(word)
+                }
+                word in numberScales -> {
+                    if (decimal) return null
+                    val scale = numberScales.getValue(word)
+                    if (scale == 100L) current = maxOf(1L, current) * scale
+                    else { total += maxOf(1L, current) * scale; current = 0L }
+                }
+                else -> return null
+            }
+        }
+        return (total + current).toString() + fraction.toString()
     }
 
     private fun suspiciousLexicalChanges(raw: String, prediction: String): List<String> {
