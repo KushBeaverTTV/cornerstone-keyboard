@@ -1,5 +1,5 @@
 # Build-KeyboardRelease.ps1 - one-command signed release APK for Cornerstone Keyboard.
-# Usage: powershell -NoProfile -ExecutionPolicy Bypass -File .\Build-KeyboardRelease.ps1 [-Lane stableRelease|unstableDebug] [-Install]
+# Usage: powershell -NoProfile -ExecutionPolicy Bypass -File .\Build-KeyboardRelease.ps1 [-Lane stableRelease|unstableDebug] [-Install] [-VersionOnly]
 #   -Lane      stableRelease (default): org.futo.inputmethod.latin, signed via keystore.properties.
 #              unstableDebug: org.futo.inputmethod.latin.unstable - the package that is actually
 #              daily-driven on the phone; signed with the repo debug keystore so it updates in place.
@@ -12,6 +12,7 @@
 param(
     [ValidateSet('stableRelease','unstableDebug')] [string]$Lane = 'stableRelease',
     [switch]$Install,
+    [switch]$VersionOnly,
     [string]$OutRoot = (Join-Path $PSScriptRoot 'releases\keyboard')
 )
 
@@ -61,6 +62,17 @@ function Get-NextVersionName($staged) {
 $staged = @(Get-StagedReleases)
 Push-Location $Repo
 try {
+    $gitCodeText = ''
+    $gitCodeCommandSucceeded = $false
+    try {
+        $gitCodeText = ((& git rev-list --first-parent --count HEAD 2>$null) | Out-String).Trim()
+        $gitCodeCommandSucceeded = $LASTEXITCODE -eq 0
+    } catch {
+        $gitCodeText = ''
+    }
+    $gitCode = [int64]0
+    $gitCodeAvailable = $gitCodeCommandSucceeded -and [int64]::TryParse($gitCodeText, [ref]$gitCode)
+    $gitHistoryAheadOfStaged = $gitCodeAvailable -and ($staged.Count -eq 0 -or $gitCode -gt $staged[0].Code)
     if (-not $env:VERSION_CODE) {
         if ($Lane -eq 'unstableDebug') {
             $today = Get-Date -Format 'yyyyMMdd'
@@ -74,14 +86,13 @@ try {
             }
             $env:VERSION_CODE = $today + ($maxSeq + 1).ToString('d2')
         } else {
-            $env:VERSION_CODE = ((& git rev-list --first-parent --count HEAD 2>$null) | Out-String).Trim()
-            if (-not $env:VERSION_CODE) {
-                if ($staged.Count -gt 0) {
-                    $env:VERSION_CODE = [string]($staged[0].Code + 1)
-                    Write-Output "git rev-list unavailable; VERSION_CODE = highest staged code +1."
-                } else {
-                    throw 'git rev-list failed for VERSION_CODE and no staged releases to derive from'
-                }
+            if ($gitHistoryAheadOfStaged) {
+                $env:VERSION_CODE = [string]$gitCode
+            } elseif ($staged.Count -gt 0) {
+                $env:VERSION_CODE = [string]($staged[0].Code + 1)
+                Write-Output "Git version code is not above staged $($staged[0].Code); VERSION_CODE = staged +1."
+            } else {
+                throw 'git rev-list failed for VERSION_CODE and no staged releases exist'
             }
         }
     }
@@ -89,13 +100,24 @@ try {
         if ($Lane -eq 'unstableDebug') {
             $env:VERSION_NAME = Get-NextVersionName $staged   # gradle appends the -unstable suffix itself
         } else {
-            $desc = (& git describe --tags 2>$null)
-            if ($LASTEXITCODE -eq 0 -and $desc) { $env:VERSION_NAME = "$desc".Trim() }
-            else { $env:VERSION_NAME = Get-NextVersionName $staged }
+            $desc = $null
+            if ($gitHistoryAheadOfStaged) {
+                try {
+                    $desc = (& git describe --tags 2>$null)
+                } catch {
+                    $desc = $null
+                }
+            }
+            if ($desc) {
+                $env:VERSION_NAME = "$desc".Trim()
+            } else {
+                $env:VERSION_NAME = Get-NextVersionName $staged
+            }
         }
     }
 } finally { Pop-Location }
 Write-Output "Version: $env:VERSION_NAME ($env:VERSION_CODE)"
+if ($VersionOnly) { return }
 
 # --- Signing sanity ----------------------------------------------------------
 # keystore.properties is gitignored; bootstrap it from

@@ -7,12 +7,10 @@ plugins {
     id 'com.android.library' version '8.10.1' apply false
 }
 
-// Local-build fallbacks for machines without working git (this checkout has no
-// repository metadata). Scan the staged releases for the newest shipped
-// cornerstone-keyboard-<name>-<code>.apk so a plain `./gradlew
-// assembleUnstableDebug` still produces a versionCode above every shipped build.
-// Env vars and git (when alive) still take precedence, so the official
-// release-build scheme is unchanged.
+// Every local build must remain installable over the newest staged release.
+// Environment overrides win; otherwise Git is used only when its first-parent
+// count is already above the staged Android version-code floor. A recovered or
+// shallow Git history must never turn a valid build into an Android downgrade.
 def newestReleaseApk = { ->
     def dir = rootProject.file('releases/keyboard')
     def bestName = null
@@ -32,18 +30,7 @@ def newestReleaseApk = { ->
     return [name: bestName, code: bestCode]
 }
 
-def getVersionCode = { ->
-    def envCode = System.getenv('VERSION_CODE')
-    if (envCode?.trim()) {
-        try {
-            return Integer.parseInt(envCode.trim())
-        } catch (NumberFormatException ignored) {
-            project.logger.warn("VERSION_CODE='$envCode' is not a valid integer – falling back to git rev-list.")
-        }
-    } else {
-        project.logger.warn("VERSION_CODE env variable not set – falling back to git rev-list.")
-    }
-
+def gitFirstParentCount = { ->
     try {
         def stdout = new ByteArrayOutputStream()
         exec {
@@ -52,14 +39,37 @@ def getVersionCode = { ->
         }
         return Integer.parseInt(stdout.toString().trim())
     } catch (ignored) {
-        def newest = newestReleaseApk()
-        if (newest.code > 0) {
-            project.logger.lifecycle("No git; local build versionCode = newest staged release +1.")
+        return null
+    }
+}
+
+def getVersionCode = { ->
+    def envCode = System.getenv('VERSION_CODE')
+    if (envCode?.trim()) {
+        try {
+            return Integer.parseInt(envCode.trim())
+        } catch (NumberFormatException ignored) {
+            project.logger.warn("VERSION_CODE='$envCode' is not a valid integer - falling back to a safe local version.")
+        }
+    } else {
+        project.logger.warn("VERSION_CODE env variable not set - calculating a safe local version.")
+    }
+
+    def newest = newestReleaseApk()
+    def gitCode = gitFirstParentCount()
+    if (gitCode != null) {
+        if (newest.code > 0 && gitCode <= newest.code) {
+            project.logger.lifecycle("Git versionCode $gitCode is not above staged $newest.code; using staged release +1.")
             return (int) (newest.code + 1)
         }
-        project.logger.lifecycle("No git and no staged releases; using date-based local versionCode.")
-        return Integer.parseInt(new Date().format('yyyyMMdd') + '01')
+        return gitCode
     }
+    if (newest.code > 0) {
+        project.logger.lifecycle("Git unavailable; local build versionCode = newest staged release +1.")
+        return (int) (newest.code + 1)
+    }
+    project.logger.lifecycle("No Git count and no staged releases; using date-based local versionCode.")
+    return Integer.parseInt(new Date().format('yyyyMMdd') + '01')
 }
 
 def getVersionName = { ->
@@ -67,23 +77,29 @@ def getVersionName = { ->
     if (envName?.trim()) {
         return envName.trim()
     } else {
-        project.logger.warn("VERSION_NAME env variable not set – falling back to git describe.")
+        project.logger.warn("VERSION_NAME env variable not set - calculating a safe local version.")
     }
 
+    def newest = newestReleaseApk()
     try {
         def stdout = new ByteArrayOutputStream()
         exec {
             commandLine 'git', 'describe', '--tags'
             standardOutput = stdout
         }
-        return stdout.toString().trim()
-    } catch (ignored) {
-        def newest = newestReleaseApk()
-        if (newest.name) {
-            project.logger.lifecycle("No git; local build versionName = newest staged release + '-local'.")
+        def gitName = stdout.toString().trim()
+        def gitCode = gitFirstParentCount()
+        if (newest.name && newest.code > 0 && gitCode != null && gitCode <= newest.code) {
+            project.logger.lifecycle("Git history predates staged releases; using newest staged versionName + '-local'.")
             return newest.name + '-local'
         }
-        project.logger.lifecycle("Failed to get version name tag from git!")
+        return gitName
+    } catch (ignored) {
+        if (newest.name) {
+            project.logger.lifecycle("Git description unavailable; using newest staged versionName + '-local'.")
+            return newest.name + '-local'
+        }
+        project.logger.lifecycle("No Git description and no staged releases; using 0.0.0-local.")
         return "0.0.0-local"
     }
 }
