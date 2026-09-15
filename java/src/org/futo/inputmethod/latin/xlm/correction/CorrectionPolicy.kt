@@ -43,8 +43,20 @@ object CorrectionPolicy {
     private val numberLinkers = setOf("and", "point")
     private val glossaryTokens = setOf(
         "qwen", "parakeet", "razr", "nvidia", "gguf", "lora", "sherpa", "onnx", "rocm", "cornerstone",
+        "v6", "v7", "v8", "v9",
     )
     private val digitsOnly = Regex("\\d+")
+    private val unitAliases = mapOf(
+        "megabyte" to "mb", "megabytes" to "mb",
+        "gigabyte" to "gb", "gigabytes" to "gb",
+        "kilobyte" to "kb", "kilobytes" to "kb",
+        "terabyte" to "tb", "terabytes" to "tb",
+        "minute" to "min", "minutes" to "min",
+        "second" to "sec", "seconds" to "sec",
+        "hour" to "hr", "hours" to "hr",
+    )
+    private val unitSymbols = mapOf("dollar" to "$", "dollars" to "$", "percent" to "%", "degrees" to "°")
+    private val digitCarrierSuffixes = unitAliases.values.toSet() + unitSymbols.values + glossaryTokens
 
     fun decide(
         enabled: Boolean,
@@ -102,6 +114,7 @@ object CorrectionPolicy {
             if (exact >= 0) after.removeAt(exact) else removed += word
         }
         val added = after.toList()
+        val rawHasDigits = raw.any(Char::isDigit)
 
         val spokenNumbers = removed.filter(::isNumberWord)
         val numbersConsumed = spokenNumbers.any { it !in numberLinkers }
@@ -110,12 +123,19 @@ object CorrectionPolicy {
             val digitTokens = added.filter(::isDigitCarrier)
             val written = digitTokens.joinToString("") { t -> t.filter(Char::isDigit) }
             if (spoken != written) return "numbers"
-        } else if (added.any { digitsOnly.matches(it) }) {
+        } else if (!rawHasDigits && added.any { word -> word.any(Char::isDigit) }) {
             return "numbers"
         }
 
         val addedPool = added.toMutableList()
-        if (numbersConsumed) added.filter(::isDigitCarrier).forEach(addedPool::remove)
+        val fusedSuffixes = mutableListOf<String>()
+        if (numbersConsumed) {
+            for (carrier in added.filter(::isDigitCarrier)) {
+                addedPool.remove(carrier)
+                val suffix = carrier.dropWhile(Char::isDigit)
+                if (suffix.isNotEmpty()) fusedSuffixes += suffix
+            }
+        }
         val removedContent = removed.filterNot(::isNumberWord)
         val swapGlossary = addedPool
             .filter { it in glossaryTokens && removedContent.none { old -> editDistance(it, old) <= 2 } }
@@ -123,6 +143,10 @@ object CorrectionPolicy {
         for (word in removedContent) {
             if (word.length < 4 || word in lexicalStopWords) continue
             if (addedPool.any { editDistance(word, it) <= 2 }) continue
+            val alias = unitAliases[word]
+            if (alias != null && (addedPool.remove(alias) || fusedSuffixes.remove(alias))) continue
+            val symbol = unitSymbols[word]
+            if (symbol != null && prediction.contains(symbol)) continue
             val swap = swapGlossary.firstOrNull() ?: return "paraphrase"
             swapGlossary.remove(swap)
             addedPool.remove(swap)
@@ -137,8 +161,13 @@ object CorrectionPolicy {
     private fun isNumberWord(word: String): Boolean =
         word in digitWords || word in numberValues || word in numberScales || word in numberLinkers
 
-    private fun isDigitCarrier(word: String): Boolean =
-        digitsOnly.matches(word) || (word in glossaryTokens && word.any(Char::isDigit))
+    private fun isDigitCarrier(word: String): Boolean {
+        if (digitsOnly.matches(word)) return true
+        if (word in glossaryTokens && word.any(Char::isDigit)) return true
+        if (word.firstOrNull()?.isDigit() != true) return false
+        val suffix = word.dropWhile(Char::isDigit)
+        return suffix.isNotEmpty() && (suffix in digitCarrierSuffixes)
+    }
 
     private fun encodeNumberWords(words: List<String>): String? {
         if (words.all { it in digitWords }) {

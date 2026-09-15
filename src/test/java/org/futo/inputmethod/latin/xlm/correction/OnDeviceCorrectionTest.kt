@@ -195,6 +195,28 @@ class OnDeviceCorrectionTest {
     }
 
     @Test
+    fun `unit abbreviations and currency symbols are allowed with verified numbers`() {
+        val mega = CorrectionPolicy.decide(
+            enabled = true,
+            raw = "download six hundred and sixty one megabytes",
+            modelOutput = """{"prediction":"Download 661 MB.","uncertain":[]}""",
+            timedOut = false,
+            generation = 20L,
+            currentGeneration = 20L,
+        ) as CorrectionOutcome.Applied
+        assertEquals("Download 661 MB.", mega.prediction)
+        val tip = CorrectionPolicy.decide(
+            enabled = true,
+            raw = "the tip is eight dollars",
+            modelOutput = """{"prediction":"The tip is $8.","uncertain":[]}""",
+            timedOut = false,
+            generation = 21L,
+            currentGeneration = 21L,
+        ) as CorrectionOutcome.Applied
+        assertEquals("The tip is $8.", tip.prediction)
+    }
+
+    @Test
     fun `glossary swaps remain allowed`() {
         val result = CorrectionPolicy.decide(
             enabled = true,
