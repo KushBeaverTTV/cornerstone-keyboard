@@ -15,6 +15,7 @@ import org.futo.inputmethod.latin.uix.SettingsKey
 import org.futo.inputmethod.latin.uix.USE_SYSTEM_VOICE_INPUT
 import org.futo.inputmethod.latin.uix.actions.clipboard.ClipboardHistoryAction
 import org.futo.inputmethod.latin.uix.actions.fonttyper.FontTyperAction
+import org.futo.inputmethod.latin.uix.actions.gif.GifAction
 import org.futo.inputmethod.latin.uix.getSetting
 import org.futo.inputmethod.latin.uix.setSettingBlocking
 
@@ -31,7 +32,6 @@ val AllActionsMap = mapOf(
     "system_voice_input" to SystemVoiceInputAction,
     "switch_language" to SwitchLanguageAction,
     "clipboard_history" to ClipboardHistoryAction,
-    "mem_dbg" to MemoryDebugAction,
     "cut" to CutAction,
     "copy" to CopyAction,
     "select_all" to SelectAllAction,
@@ -47,6 +47,8 @@ val AllActionsMap = mapOf(
     // Wave 2 additions: append-only, indices above must stay stable
     "quick_clipboard" to QuickClipboardAction,
     "text_expansion" to TextExpansionAction,
+    "device" to DeviceAction,
+    "gif" to GifAction,
 )
 
 val ActionToId = AllActionsMap.entries.associate { it.value to it.key }
@@ -268,9 +270,9 @@ fun String.toActionList(): List<Action> = split(",").mapNotNull { AllActionsMap[
 val DefaultActionSettings = mapOf(
     ActionCategory.ActionKey to listOf(EmojiAction),
     ActionCategory.PinnedKey to listOf(VoiceInputAction, AgentAction),
-    ActionCategory.Favorites to listOfNotNull(if(IsDebug) MemoryDebugAction else null, SwitchLanguageAction, UndoAction, RedoAction, TextEditAction, ClipboardHistoryAction, ThemeAction, KeyboardModeAction),
+    ActionCategory.Favorites to listOf(SwitchLanguageAction, UndoAction, RedoAction, TextEditAction, ClipboardHistoryAction, ThemeAction, KeyboardModeAction),
     ActionCategory.More to listOf(), // Remaining actions get populated automatically by ensureWellFormed
-    ActionCategory.Disabled to listOf(MemoryDebugAction, SystemVoiceInputAction, BugViewerAction)
+    ActionCategory.Disabled to listOf(SystemVoiceInputAction, BugViewerAction)
 )
 
 val DefaultActionKey = DefaultActionSettings[ActionCategory.ActionKey]!!.firstOrNull()?.let {

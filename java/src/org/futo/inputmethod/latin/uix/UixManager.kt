@@ -122,6 +122,7 @@ import org.futo.inputmethod.latin.settings.Settings
 import org.futo.inputmethod.latin.suggestions.SuggestionStripViewListener
 import org.futo.inputmethod.latin.uix.actions.ActionEditor
 import org.futo.inputmethod.latin.uix.actions.ActionRegistry
+import org.futo.inputmethod.latin.uix.actions.AiAutocorrectController
 import org.futo.inputmethod.latin.uix.actions.AllActions
 import org.futo.inputmethod.latin.uix.actions.BugViewerAction
 import org.futo.inputmethod.latin.uix.actions.BugViewerState
@@ -548,6 +549,11 @@ class UixActionKeyboardManager(val uixManager: UixManager, val latinIME: LatinIM
     override fun getCurrentIME(): IMEInterface {
         return latinIME.imeManager.getActiveIME(Settings.getInstance().current)
     }
+
+    override fun isIncognitoContext(): Boolean = IncognitoState.active
+
+    override fun getCurrentEditorInfo(): android.view.inputmethod.EditorInfo? =
+        latinIME.currentInputEditorInfo
 }
 
 data class ActiveDialogRequest(
@@ -620,6 +626,10 @@ class UixManager(private val latinIME: LatinIME) {
 
     private var inlineSuggestions: MutableState<List<MutableState<View?>>> = mutableStateOf(emptyList())
     private val keyboardManagerForAction = UixActionKeyboardManager(this, latinIME)
+
+    // AI "Fix with AI" chip: watches input events, offers a one-tap agent fix
+    // for the just-finished sentence in the suggestion strip.
+    private val aiAutocorrect = AiAutocorrectController(keyboardManagerForAction)
 
     private var mainKeyboardHidden = mutableStateOf(false)
 
@@ -755,6 +765,8 @@ class UixManager(private val latinIME: LatinIME) {
                             else null
                     },
                     onQuickClipDismiss = { quickClipState.value = null },
+                    aiFixOffer = aiAutocorrect.offer.value != null,
+                    onAiFixTap = { aiAutocorrect.onChipTapped() },
                     needToUseExpandableSuggestionUi = needToUseExpandableSuggestionUi,
                     loading = latinIME.imeManager.isImeLoading()
                 )
@@ -830,7 +842,7 @@ class UixManager(private val latinIME: LatinIME) {
         Column {
             Column(
                 Modifier.background(
-                    if (showingAboveKeyboard) {
+                    windowImpl.windowBackgroundColor ?: if (showingAboveKeyboard) {
                         LocalKeyboardScheme.current.keyboardSurfaceDim
                     } else {
                         Color.Transparent
@@ -1648,6 +1660,7 @@ class UixManager(private val latinIME: LatinIME) {
 
         quickClipState.value = QuickClip.getCurrentState(latinIME)
         floatingPreeditEditing.value = false
+        aiAutocorrect.clear()
     }
 
     fun onInputFinishing() {
@@ -1657,11 +1670,13 @@ class UixManager(private val latinIME: LatinIME) {
         resizers.hideResizer()
         inlineSuggestions.value = emptyList()
         floatingPreeditText.value = ""
+        aiAutocorrect.clear()
     }
 
     // Called by InputLogic on any event
     fun onInputEvent(textBlank: Boolean) {
         inlineStuffHiddenByTyping.value = textBlank == false
+        aiAutocorrect.onInputEvent()
     }
 
     fun updateEmojiTranslationsIfNeeded() {

@@ -3,6 +3,7 @@ package org.futo.voiceinput.shared.ui
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -10,6 +11,8 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
@@ -22,6 +25,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -44,6 +49,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.drawscope.Fill
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
@@ -53,6 +59,7 @@ import androidx.compose.ui.semantics.text
 import androidx.compose.ui.semantics.toggleableState
 import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
@@ -71,7 +78,7 @@ data class MicrophoneDeviceState(
 @Composable
 fun AnimatedRecognizeCircle(magnitude: MutableFloatState = mutableFloatStateOf(0.5f)) {
     val radius = animateValueChanges(magnitude.floatValue, 100)
-    val color = MaterialTheme.colorScheme.primaryContainer
+    val color = MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)
 
     val radiusMod = with(LocalDensity.current) {
         80.dp.toPx()
@@ -170,10 +177,60 @@ private fun BoxScope.BluetoothToggleIcon(device: MutableState<MicrophoneDeviceSt
 }
 
 @Composable
+private fun VoiceStatusBar(
+    autoStopSecondsRemaining: Int?,
+    onDone: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val statusText = if (autoStopSecondsRemaining == null) {
+        stringResource(R.string.listening)
+    } else {
+        stringResource(R.string.voice_silence_detected)
+    }
+    val hintText = autoStopSecondsRemaining?.let {
+        pluralStringResource(R.plurals.voice_stopping_in_seconds, it, it)
+    } ?: stringResource(R.string.voice_auto_finish_hint)
+
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = 8.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(
+                text = statusText,
+                color = MaterialTheme.colorScheme.primary,
+                fontWeight = FontWeight.Bold,
+                style = Typography.labelSmall,
+            )
+            Text(
+                text = hintText,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+        Button(
+            onClick = onDone,
+            shape = RoundedCornerShape(8.dp),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = MaterialTheme.colorScheme.primary,
+                contentColor = MaterialTheme.colorScheme.onPrimary,
+            ),
+            contentPadding = PaddingValues(horizontal = 22.dp, vertical = 10.dp),
+        ) {
+            Text(stringResource(R.string.voice_finish_now), fontWeight = FontWeight.Bold)
+        }
+    }
+}
+
+@Composable
 fun InnerRecognize(
     magnitude: MutableFloatState = mutableFloatStateOf(0.5f),
     state: MutableState<MagnitudeState> = mutableStateOf(MagnitudeState.MIC_MAY_BE_BLOCKED),
-    device: MutableState<MicrophoneDeviceState>? = null
+    device: MutableState<MicrophoneDeviceState>? = null,
+    autoStopSecondsRemaining: Int? = null,
+    onDone: () -> Unit = {},
 ) {
     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         AnimatedRecognizeCircle(magnitude = magnitude)
@@ -182,7 +239,7 @@ fun InnerRecognize(
             painter = painterResource(R.drawable.mic_2_),
             contentDescription = stringResource(R.string.stop_recording),
             modifier = Modifier.size(48.dp),
-            tint = MaterialTheme.colorScheme.onPrimaryContainer
+            tint = MaterialTheme.colorScheme.onSurface,
         )
 
         val text = when (state.value) {
@@ -197,9 +254,14 @@ fun InnerRecognize(
                 .fillMaxWidth()
                 .offset(x = 0.dp, y = 48.dp),
             textAlign = TextAlign.Center,
-            color = MaterialTheme.colorScheme.onSurface
+            color = MaterialTheme.colorScheme.onSurface,
         )
 
+        VoiceStatusBar(
+            autoStopSecondsRemaining = autoStopSecondsRemaining,
+            onDone = onDone,
+            modifier = Modifier.align(Alignment.BottomCenter),
+        )
         BluetoothToggleIcon(device)
     }
 }
@@ -216,27 +278,32 @@ fun ColumnScope.RecognizeLoadingCircle(text: String = "Initializing...") {
 }
 
 @Composable
-fun ColumnScope.PartialDecodingResult(text: String = "I am speaking [...]") {
-    CircularProgressIndicator(
-        modifier = Modifier.align(Alignment.CenterHorizontally),
-        color = MaterialTheme.colorScheme.onPrimary
+fun ColumnScope.PartialDecodingResult(
+    text: String = "I am speaking […]",
+    autoStopSecondsRemaining: Int? = null,
+    onDone: () -> Unit = {},
+) {
+    VoiceStatusBar(
+        autoStopSecondsRemaining = autoStopSecondsRemaining,
+        onDone = onDone,
     )
-    Spacer(modifier = Modifier.height(6.dp))
     Surface(
         modifier = Modifier
-            .padding(4.dp)
+            .padding(horizontal = 8.dp, vertical = 4.dp)
             .fillMaxWidth(),
-        color = MaterialTheme.colorScheme.primaryContainer,
-        shape = RoundedCornerShape(4.dp)
+        color = MaterialTheme.colorScheme.surface,
+        shape = RoundedCornerShape(10.dp),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.55f)),
     ) {
         Text(
             text,
             modifier = Modifier
                 .align(Alignment.Start)
-                .padding(8.dp)
+                .padding(12.dp)
                 .defaultMinSize(0.dp, 64.dp),
             textAlign = TextAlign.Start,
-            style = Typography.bodyMedium
+            color = MaterialTheme.colorScheme.onSurface,
+            style = Typography.bodyMedium,
         )
     }
 }

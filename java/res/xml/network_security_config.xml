@@ -1,10 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Agent Key prototype: the VPS endpoint lives on the Tailscale mesh and is
-     reached over plain HTTP (the mesh itself is encrypted). Permit cleartext
-     for that host ONLY; everything else stays blocked. -->
+<!-- Cleartext is denied by default. Only the Cornerstone hub bridge hosts are
+     exempt: the PC running hub-bridge/hub_bridge.py (LAN address and its
+     Tailscale address). The Gradle F-5 gate fails the build if
+     AGENT_KEY_ENDPOINT is http:// and its host is not listed here; keep this
+     list in sync with CLEARTEXT_ALLOWLIST in HubRepository.kt (unit-tested). -->
 <network-security-config>
     <base-config cleartextTrafficPermitted="false" />
     <domain-config cleartextTrafficPermitted="true">
-        <domain includeSubdomains="false">tailscale-mesh-host.local</domain>
+        <domain includeSubdomains="false">192.168.0.223</domain>
+        <domain includeSubdomains="false">100.84.54.112</domain>
     </domain-config>
 </network-security-config>

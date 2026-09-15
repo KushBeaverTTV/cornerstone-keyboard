@@ -49,6 +49,7 @@ import org.futo.inputmethod.latin.uix.theme.ThemeOption
 import org.futo.inputmethod.latin.uix.theme.UixThemeAuto
 import org.futo.inputmethod.latin.uix.theme.getThemeOption
 import org.futo.inputmethod.latin.uix.theme.orDefault
+import org.futo.inputmethod.latin.uix.settings.pages.CornerstoneSettingsColorScheme
 import org.futo.inputmethod.latin.xlm.ModelPaths
 import org.futo.inputmethod.updates.checkForUpdateAndSaveToPreferences
 import org.futo.inputmethod.v2keyboard.LayoutManager
@@ -169,18 +170,20 @@ class SettingsActivity : ComponentActivity(), DynamicThemeProviderOwner {
             DataStoreCacheProvider {
                 SharedPrefsCacheProvider {
                     UixThemeAuto {
-                        Surface(
-                            modifier = Modifier
-                                .fillMaxSize(),
-                            color = MaterialTheme.colorScheme.background
-                        ) {
-                            Box(Modifier.safeDrawingPadding()) {
-                                SetupOrMain(
-                                    inputMethodEnabled.value,
-                                    inputMethodSelected.value,
-                                    doublePackage.value
-                                ) {
-                                    SettingsNavigator(navController = navController)
+                        MaterialTheme(colorScheme = CornerstoneSettingsColorScheme) {
+                            Surface(
+                                modifier = Modifier
+                                    .fillMaxSize(),
+                                color = MaterialTheme.colorScheme.background
+                            ) {
+                                Box(Modifier.safeDrawingPadding()) {
+                                    SetupOrMain(
+                                        inputMethodEnabled.value,
+                                        inputMethodSelected.value,
+                                        doublePackage.value
+                                    ) {
+                                        SettingsNavigator(navController = navController)
+                                    }
                                 }
                             }
                         }
@@ -217,14 +220,6 @@ class SettingsActivity : ComponentActivity(), DynamicThemeProviderOwner {
         super.onCreate(savedInstanceState)
 
         LayoutManager.init(this)
-
-        // KBP: voice model downloads report progress via notifications — ask once
-        if (Build.VERSION.SDK_INT >= 33 &&
-            checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) !=
-                android.content.pm.PackageManager.PERMISSION_GRANTED
-        ) {
-            requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 42)
-        }
 
         enableEdgeToEdge()
 

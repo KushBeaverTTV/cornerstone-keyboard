@@ -27,13 +27,17 @@ import java.util.concurrent.atomic.AtomicBoolean
  * the mesh itself is encrypted.)
  *
  * Download discipline (same lessons as ModelParakeetAsset's asset seeding):
- *   stream -> <file>.download -> byte-count verify -> atomic rename() to final name
- *   -> .complete marker written LAST. Presence of the marker guarantees every file
- *   finished; without it a truncated ONNX file would cause an uncatchable native
- *   abort (SIGABRT) inside onnxruntime at load time.
+ *   stream -> <staging>/<file>.download -> byte-count + SHA-256 verify -> atomic
+ *   rename() to <staging>/<file> -> only after ALL files verify, atomic rename()
+ *   each into the live model dir -> .complete marker written LAST. The engine can
+ *   never mmap a file the downloader is mid-write on: ModelParakeetAsset.exists()
+ *   requires the marker, and the marker only appears after every file finished.
+ *   Without the marker a truncated ONNX would cause an uncatchable native abort
+ *   (SIGABRT) inside onnxruntime at load time.
  *
- * On any failure every *.download partial is deleted and an error notification is
- * shown, so no partial state survives.
+ * On any failure the staging .download partials are KEPT (they are verified
+ * prefixes and the next run resumes them via HTTP Range); only a provably
+ * corrupt partial is deleted, and an error notification is shown.
  *
  * Progress is surfaced purely through a NotificationManager progress notification
  * (channel created on demand) — no UI files are touched.
@@ -42,10 +46,21 @@ object ParakeetModelDownloader {
     private const val TAG = "ParakeetModelDl"
 
     const val MODEL_DIR_NAME = "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8"
-    // KBP delivery mirror, injected at build time from local.properties
-    // (MODEL_MIRROR_URL). Empty default = only bundled/HF sources work.
-    private val BASE_URL =
-        "${org.futo.voiceinput.shared.BuildConfig.MODEL_MIRROR_URL}/models/$MODEL_DIR_NAME"
+    // Prefer the private mirror when one is injected. Personal builds must remain
+    // usable without that build-machine secret, so fall back to the hash-pinned
+    // upstream repository over HTTPS rather than constructing an invalid /models URL.
+    private val configuredMirror =
+        org.futo.voiceinput.shared.BuildConfig.MODEL_MIRROR_URL.trim().trimEnd('/')
+    private val BASE_URL = if (
+        configuredMirror.startsWith("https://") || configuredMirror.startsWith("http://")
+    ) {
+        "$configuredMirror/models/$MODEL_DIR_NAME"
+    } else {
+        "https://huggingface.co/csukuangfj/$MODEL_DIR_NAME/resolve/main"
+    }
+
+    val sourceLabel: String
+        get() = if (configuredMirror.isNotBlank()) "Cornerstone mirror" else "Hugging Face"
 
     private const val CHANNEL_ID = "parakeet_model_download"
     private const val PROGRESS_NOTIFICATION_ID = 7101
@@ -67,6 +82,23 @@ object ParakeetModelDownloader {
         "tokens.txt"        to 9384L
     )
 
+    /**
+     * Pinned SHA-256 hashes, verified after download (including after any Range
+     * resume completes) BEFORE the file leaves staging and before the .complete
+     * marker can be written.
+     *
+     * Trust-on-first-use pins captured 2026-08-26 from the upstream k2-fsa model
+     * (huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8);
+     * each file's byte size also matches EXPECTED_SIZES. A file without a
+     * pinned hash logs a warning and falls back to the byte-size check.
+     */
+    val EXPECTED_SHA256: Map<String, String> = mapOf(
+        "encoder.int8.onnx" to "a32b12d17bbbc309d0686fbbcc2987b5e9b8333a7da83fa6b089f0a2acd651ab",
+        "decoder.int8.onnx" to "b6bb64963457237b900e496ee9994b59294526439fbcc1fecf705b31a15c6b4e",
+        "joiner.int8.onnx"  to "7946164367946e7f9f29a122407c3252b680dbae9a51343eb2488d057c3c43d2",
+        "tokens.txt"        to "ec182b70dd42113aff6c5372c75cac58c952443eb22322f57bbd7f53977d497d"
+    )
+
     private val client = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(60, TimeUnit.SECONDS)
@@ -84,14 +116,59 @@ object ParakeetModelDownloader {
     fun targetDir(context: Context): File =
         File(context.filesDir, "models/$MODEL_DIR_NAME")
 
+    /**
+     * Sibling staging directory: all downloads land here first and are only
+     * swapped into [targetDir] after full verification, so the engine never
+     * mmaps a file the downloader is mid-write on.
+     */
+    private fun stagingDir(context: Context): File =
+        File(context.filesDir, "models/$MODEL_DIR_NAME.staging")
+
     private fun completeMarker(context: Context): File =
         File(targetDir(context), ".complete")
 
+    @Throws(IOException::class)
+    private fun sha256Hex(file: File): String {
+        val digest = java.security.MessageDigest.getInstance("SHA-256")
+        file.inputStream().buffered().use { input ->
+            val buffer = ByteArray(1 shl 20)
+            while (true) {
+                val read = input.read(buffer)
+                if (read < 0) break
+                digest.update(buffer, 0, read)
+            }
+        }
+        return digest.digest().joinToString("") { "%02x".format(it) }
+    }
+
+    /**
+     * Full-content verification of a downloaded file in staging: exact byte size
+     * against EXPECTED_SIZES, then SHA-256 against EXPECTED_SHA256 when a hash is
+     * pinned (otherwise a warning and the size check stands alone).
+     */
+    @Throws(IOException::class)
+    private fun verifyStagedFile(name: String, file: File) {
+        val expectedSize = EXPECTED_SIZES[name] ?: 0L
+        if (expectedSize > 0L && file.length() != expectedSize) {
+            throw IOException("Size mismatch for $name: expected $expectedSize bytes (EXPECTED_SIZES), got ${file.length()}")
+        }
+
+        val pinnedHash = EXPECTED_SHA256[name]
+        if (pinnedHash != null) {
+            val actualHash = sha256Hex(file)
+            if (!actualHash.equals(pinnedHash, ignoreCase = true)) {
+                throw IOException("SHA-256 mismatch for $name: expected $pinnedHash, got $actualHash")
+            }
+        } else {
+            Log.w(TAG, "No pinned SHA-256 for $name — verified by byte size only")
+        }
+    }
+
     /**
      * Strict presence check: all 4 required files present (non-empty) AND the
-     * .complete marker written. Deliberately stricter than
-     * ModelParakeetAsset.exists() (which also accepts sideloads/asset bundles) —
-     * this answers "is a full download on disk".
+     * .complete marker written — the same marker gate ModelParakeetAsset.exists()
+     * applies, plus a file-level sanity check. This answers "is a full download
+     * on disk".
      */
     fun isModelFullyDownloaded(context: Context): Boolean {
         if (!completeMarker(context).exists()) return false
@@ -137,6 +214,11 @@ object ParakeetModelDownloader {
             notifyError(context, "Could not create model directory")
             return false
         }
+        val staging = stagingDir(context)
+        if (!staging.mkdirs() && !staging.isDirectory) {
+            notifyError(context, "Could not create model staging directory")
+            return false
+        }
 
         val notificationManager =
             context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -145,7 +227,9 @@ object ParakeetModelDownloader {
         // Total bytes for aggregate progress: known expected sizes only; 0 = unknown.
         val knownTotal = REQUIRED_FILES.sumOf { EXPECTED_SIZES[it] ?: 0L }
         var downloadedTotal = 0L
-        val writtenManifest = mutableListOf<String>()
+
+        fun isCompleteFile(f: File, expected: Long) =
+            f.isFile && f.length() > 0L && (expected == 0L || f.length() == expected)
 
         try {
             // Fresh attempt: clear any prior failure state so the UI doesn't show
@@ -155,16 +239,16 @@ object ParakeetModelDownloader {
             REQUIRED_FILES.forEachIndexed { index, name ->
                 val url = "$BASE_URL/$name"
                 val finalFile = File(dir, name)
-                val tmpFile = File(dir, "$name.download")
+                val stagedFile = File(staging, name)
+                val tmpFile = File(staging, "$name.download")
                 val expected = EXPECTED_SIZES[name] ?: 0L
 
-                // Skip files already fully in place from a previous (interrupted) run.
-                if (finalFile.isFile && finalFile.length() > 0L &&
-                    (expected == 0L || finalFile.length() == expected)
-                ) {
+                // Skip files already fully in place from a previous (interrupted)
+                // run — either swapped into the live dir or verified in staging.
+                if (isCompleteFile(finalFile, expected) || isCompleteFile(stagedFile, expected)) {
+                    val inPlace = if (isCompleteFile(finalFile, expected)) finalFile else stagedFile
                     tmpFile.delete() // stale partial superseded by the complete file
-                    downloadedTotal += finalFile.length()
-                    writtenManifest.add("$name:${finalFile.length()}")
+                    downloadedTotal += inPlace.length()
                     return@forEachIndexed
                 }
 
@@ -226,33 +310,48 @@ object ParakeetModelDownloader {
                         }
                     }
 
-                    // Byte-verify: exact EXPECTED_SIZES entry when known, else the
-                    // response Content-Length, else accept with a warning.
+                    // Byte-verify against the response when no size is pinned.
                     val actual = tmpFile.length()
-                    when {
-                        expected > 0L && actual != expected ->
-                            throw IOException("Size mismatch for $name: expected $expected bytes (EXPECTED_SIZES), got $actual")
-                        expected == 0L && contentLength >= 0L && actual != contentLength ->
-                            throw IOException("Size mismatch for $name: expected $contentLength bytes (Content-Length), got $actual")
-                        expected == 0L && contentLength < 0L ->
-                            Log.w(TAG, "No size reference for $name (${actual}B) - skipping byte verification")
+                    if (expected == 0L && contentLength >= 0L && actual != contentLength) {
+                        throw IOException("Size mismatch for $name: expected $contentLength bytes (Content-Length), got $actual")
                     }
+                    // Full verification (EXPECTED_SIZES + pinned SHA-256) BEFORE the
+                    // file leaves staging — a corrupt file must never go live.
+                    verifyStagedFile(name, tmpFile)
 
-                    if (finalFile.exists() && !finalFile.delete()) {
-                        throw IOException("Could not replace existing file: ${finalFile.absolutePath}")
+                    if (stagedFile.exists() && !stagedFile.delete()) {
+                        throw IOException("Could not replace staged file: ${stagedFile.absolutePath}")
                     }
-                    if (!tmpFile.renameTo(finalFile)) {
+                    if (!tmpFile.renameTo(stagedFile)) {
                         // Keep the verified partial — the next run resumes/reuses it
                         throw IOException("Atomic rename failed for $name")
                     }
 
                     downloadedTotal += actual
-                    writtenManifest.add("$name:$actual")
                 }
+            }
+
+            // All four files verified in staging: swap them into the live
+            // directory only now, so the engine can never mmap a mid-write file.
+            val writtenManifest = mutableListOf<String>()
+            REQUIRED_FILES.forEach { name ->
+                val stagedFile = File(staging, name)
+                val finalFile = File(dir, name)
+                if (stagedFile.isFile) {
+                    if (finalFile.exists() && !finalFile.delete()) {
+                        throw IOException("Could not replace existing file: ${finalFile.absolutePath}")
+                    }
+                    if (!stagedFile.renameTo(finalFile)) {
+                        // Staging survives — the next run reuses the verified files
+                        throw IOException("Atomic rename failed for $name")
+                    }
+                }
+                writtenManifest.add("$name:${finalFile.length()}")
             }
 
             // Marker LAST: its presence guarantees every file above completed.
             completeMarker(context).writeText(writtenManifest.joinToString("\n"))
+            staging.deleteRecursively() // stale .download partials are moot now
 
             progressPercent.intValue = 100
             progressText.value = "Voice model ready — close and reopen voice input"
@@ -264,10 +363,10 @@ object ParakeetModelDownloader {
         } catch (e: Exception) {
             Log.e(TAG, "Parakeet model download failed", e)
             lastError.value = e.message ?: e.javaClass.simpleName
-            // Keep .download partials — they are verified prefixes and the next run
-            // resumes them via HTTP Range. Only drop a partial that is provably
-            // corrupt (longer than its known expected size).
-            dir.listFiles()?.forEach {
+            // Keep staging .download partials — they are verified prefixes and the
+            // next run resumes them via HTTP Range. Only drop a partial that is
+            // provably corrupt (longer than its known expected size).
+            staging.listFiles()?.forEach {
                 if (it.isFile && it.name.endsWith(".download")) {
                     val base = it.name.removeSuffix(".download")
                     val expected = EXPECTED_SIZES[base] ?: 0L

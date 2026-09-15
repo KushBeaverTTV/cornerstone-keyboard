@@ -9,7 +9,6 @@ enum class MagnitudeState {
 interface AudioRecognizerListener {
     fun cancelled()
     fun finished(result: String)
-    fun languageDetected(language: Language)
     fun partialResult(result: String)
     fun decodingStatus(status: InferenceState)
     fun modelLoadingFailed()
@@ -19,6 +18,7 @@ interface AudioRecognizerListener {
 
     fun recordingStarted(device: MicrophoneDeviceState)
     fun updateMagnitude(magnitude: Float, state: MagnitudeState)
+    fun autoStopCountdown(secondsRemaining: Int?) {}
 
     fun processing()
 }

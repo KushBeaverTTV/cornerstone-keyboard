@@ -121,6 +121,7 @@ import org.futo.inputmethod.latin.SuggestionBlacklist
 import org.futo.inputmethod.latin.common.Constants
 import org.futo.inputmethod.latin.suggestions.SuggestionStripViewListener
 import org.futo.inputmethod.latin.uix.actions.FavoriteActions
+import org.futo.inputmethod.latin.uix.actions.AiFixChip
 import org.futo.inputmethod.latin.uix.actions.MoreActionsAction
 import org.futo.inputmethod.latin.uix.actions.PinnedActions
 import org.futo.inputmethod.latin.uix.actions.toActionList
@@ -825,6 +826,8 @@ fun ActionBar(
     onQuickClipDismiss: () -> Unit = {},
     needToUseExpandableSuggestionUi: Boolean = false,
     loading: Boolean = false,
+    aiFixOffer: Boolean = false,
+    onAiFixTap: () -> Unit = {},
 ) {
     val view = LocalView.current
     val context = LocalContext.current
@@ -901,6 +904,10 @@ fun ActionBar(
                             InlineSuggestions(inlineSuggestions)
                         } else if(quickClipState != null) {
                             QuickClipView(quickClipState, onQuickClipDismiss)
+                        } else if (aiFixOffer) {
+                            // Transient AI fix chip: takes over the strip like
+                            // QuickClip does; suggestions return when it expires.
+                            AiFixChip(onTap = onAiFixTap)
                         } else if (words != null) {
                             SuggestionItems(
                                 words,

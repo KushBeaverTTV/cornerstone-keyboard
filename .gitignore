@@ -11,3 +11,9 @@ key.jks
 java/res/raw/mozc.data
 .cxx
 java/src/org/futo/inputmethod/keyboard/internal/KeyboardTextsTable.java
+# Fork-fetched binary deps (Gradle fetchSherpaOnnxAar re-downloads on demand)
+/libs-fork/
+/releases/
+.git.dangling
+**/.git.dangling
+/native/correction/build-*/

@@ -20,7 +20,6 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.LifecycleCoroutineScope
 import org.futo.voiceinput.shared.types.AudioRecognizerListener
 import org.futo.voiceinput.shared.types.InferenceState
-import org.futo.voiceinput.shared.types.Language
 import org.futo.voiceinput.shared.types.MagnitudeState
 import org.futo.voiceinput.shared.ui.InnerRecognize
 import org.futo.voiceinput.shared.ui.MicrophoneDeviceState
@@ -90,7 +89,12 @@ class RecognizerView(
 
     private val loadingCircleText = mutableStateOf("")
     private val partialDecodingText = mutableStateOf("")
+    private val autoStopSecondsRemaining = mutableStateOf<Int?>(null)
     private val currentViewState = mutableStateOf(CurrentView.LoadingCircle)
+
+    // Visibility contract for the partial box: once non-blank text is showing,
+    // nothing but finish/cancel may hide it (see PartialViewPolicy).
+    private val partialBoxState = mutableStateOf(PartialViewPolicy.BoxState.Hidden)
 
     private val currentDeviceState = mutableStateOf(MicrophoneDeviceState(
         bluetoothAvailable = false,
@@ -111,7 +115,11 @@ class RecognizerView(
 
             CurrentView.PartialDecodingResult -> {
                 Column {
-                    PartialDecodingResult(text = partialDecodingText.value)
+                    PartialDecodingResult(
+                        text = partialDecodingText.value,
+                        autoStopSecondsRemaining = autoStopSecondsRemaining.value,
+                        onDone = ::finish,
+                    )
                 }
             }
 
@@ -119,7 +127,9 @@ class RecognizerView(
                 InnerRecognize(
                     magnitude = magnitudeState,
                     state = statusState,
-                    device = currentDeviceState
+                    device = currentDeviceState,
+                    autoStopSecondsRemaining = autoStopSecondsRemaining.value,
+                    onDone = ::finish,
                 )
             }
 
@@ -168,10 +178,6 @@ class RecognizerView(
             listener.finished(result)
         }
 
-        override fun languageDetected(language: Language) {
-            // TODO
-        }
-
         override fun modelLoadingFailed() {
             listener.cancelled()
             currentViewState.value = CurrentView.ModelError
@@ -181,6 +187,7 @@ class RecognizerView(
             listener.partialResult(result)
             if (settings.shouldShowInlinePartialResult && result.isNotBlank()) {
                 partialDecodingText.value = result
+                partialBoxState.value = PartialViewPolicy.onPartialResult(partialBoxState.value, result)
                 currentViewState.value = CurrentView.PartialDecodingResult
             }
         }
@@ -194,11 +201,13 @@ class RecognizerView(
                 }
             )
 
+            partialBoxState.value = PartialViewPolicy.onFinish()
             loadingCircleText.value = text
             currentViewState.value = CurrentView.LoadingCircle
         }
 
         override fun loading() {
+            partialBoxState.value = PartialViewPolicy.onFinish()
             loadingCircleText.value = context.getString(R.string.initializing)
             currentViewState.value = CurrentView.LoadingCircle
         }
@@ -221,6 +230,7 @@ class RecognizerView(
 
         override fun recordingStarted(device: MicrophoneDeviceState) {
             updateMagnitude(0.0f, MagnitudeState.NOT_TALKED_YET)
+            autoStopSecondsRemaining.value = null
             currentDeviceState.value = device
             listener.recordingStarted(device)
         }
@@ -228,11 +238,24 @@ class RecognizerView(
         override fun updateMagnitude(magnitude: Float, state: MagnitudeState) {
             if(settings.shouldAnimateBubble) magnitudeState.floatValue = magnitude
             statusState.value = state
-            currentViewState.value = CurrentView.InnerRecognize
+            // This fires ~10x/second from the recording loop. It must NEVER hide
+            // the partial box once text is on screen — flipping back to the
+            // bubble here is what made the box flash on and off between decode
+            // ticks. The bubble state keeps updating underneath for when the
+            // box isn't showing.
+            if (PartialViewPolicy.onMagnitudeTick(partialBoxState.value) == PartialViewPolicy.BoxState.Hidden) {
+                currentViewState.value = CurrentView.InnerRecognize
+            }
+        }
+
+        override fun autoStopCountdown(secondsRemaining: Int?) {
+            autoStopSecondsRemaining.value = secondsRemaining
         }
 
         override fun processing() {
-            loadingCircleText.value = context.getString(R.string.processing)
+            partialBoxState.value = PartialViewPolicy.onFinish()
+            autoStopSecondsRemaining.value = null
+            loadingCircleText.value = context.getString(R.string.voice_finalizing)
             currentViewState.value = CurrentView.LoadingCircle
         }
     }

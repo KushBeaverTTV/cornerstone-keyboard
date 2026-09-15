@@ -69,6 +69,7 @@ import org.futo.inputmethod.latin.uix.DynamicThemeProvider
 import org.futo.inputmethod.latin.uix.DynamicThemeProviderOwner
 import org.futo.inputmethod.latin.uix.EmojiTracker.useEmoji
 import org.futo.inputmethod.latin.uix.HiddenKeysSetting
+import org.futo.inputmethod.latin.uix.IncognitoState
 import org.futo.inputmethod.latin.uix.KeyBordersSetting
 import org.futo.inputmethod.latin.uix.KeyHintsSetting
 import org.futo.inputmethod.latin.uix.KeyboardColorScheme
@@ -104,6 +105,9 @@ import org.futo.inputmethod.v2keyboard.LayoutManager
 import org.futo.inputmethod.v2keyboard.dimensionsSameAs
 import org.futo.inputmethod.v2keyboard.getPrimaryLayoutOverride
 import org.futo.inputmethod.v2keyboard.isFoldableInnerDisplayAllowed
+import org.futo.inputmethod.latin.uix.actions.warmCornerstoneVoiceIfEnabled
+import org.futo.voiceinput.shared.EngineRetentionPolicy
+import org.futo.voiceinput.shared.whisper.RecognizerHolder
 import kotlin.math.roundToInt
 
 /** Whether or not we can render into the navbar */
@@ -622,6 +626,7 @@ class LatinIME : InputMethodServiceCompose(), LatinIMELegacy.SuggestionStripCont
 
     override fun onStartInput(attribute: EditorInfo?, restarting: Boolean) {
         super.onStartInput(attribute, restarting)
+        IncognitoState.active = (attribute?.imeOptions ?: 0) and EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING != 0
         latinIMELegacy.onStartInput(attribute, restarting)
         uixManager.inputStarted(attribute)
         //imeManager.onStartInput() // TODO: Is this call needed or not?
@@ -629,12 +634,15 @@ class LatinIME : InputMethodServiceCompose(), LatinIMELegacy.SuggestionStripCont
 
     override fun onStartInputView(info: EditorInfo?, restarting: Boolean) {
         super.onStartInputView(info, restarting)
+        IncognitoState.active = (info?.imeOptions ?: 0) and EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING != 0
         onSizeMaybeUpdated()
         imeManager.onStartInput()
         latinIMELegacy.onStartInputView(info, restarting)
         lifecycleScope.launch { uixManager.showUpdateNoticeIfNeeded() }
         updateColorsIfDynamicChanged()
         uixManager.updateEmojiTranslationsIfNeeded()
+        // Cornerstone Voice: have the engine resident before the mic is tapped.
+        warmCornerstoneVoiceIfEnabled(this, "keyboard shown")
     }
 
     override fun onFinishInputView(finishingInput: Boolean) {
@@ -646,6 +654,7 @@ class LatinIME : InputMethodServiceCompose(), LatinIMELegacy.SuggestionStripCont
 
     override fun onFinishInput() {
         super.onFinishInput()
+        IncognitoState.active = false
         latinIMELegacy.onFinishInput()
         uixManager.onInputFinishing()
     }
@@ -824,6 +833,16 @@ class LatinIME : InputMethodServiceCompose(), LatinIMELegacy.SuggestionStripCont
     override fun onTrimMemory(level: Int) {
         super.onTrimMemory(level)
         uixManager.cleanUpPersistentStates()
+
+        // Voice models stay warm (~600MB for Parakeet) for fast dictation
+        // starts. TRIM_MEMORY_UI_HIDDEN arrives on every keyboard dismissal
+        // and is NOT pressure — releasing there cold-loaded the engine on
+        // every mic tap. Only genuine pressure (EngineRetentionPolicy) drops
+        // it; the next keyboard show re-warms in the background.
+        if (EngineRetentionPolicy.shouldReleaseEngines(level)) {
+            Log.i("LatinIME", "onTrimMemory($level): releasing voice engines")
+            RecognizerHolder.releaseAll()
+        }
     }
 
     @RequiresApi(Build.VERSION_CODES.R)

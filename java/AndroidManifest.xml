@@ -23,6 +23,8 @@
     <uses-permission android:name="android.permission.VIBRATE"/>
     <uses-permission android:name="android.permission.WRITE_USER_DICTIONARY"/>
     <uses-permission android:name="android.permission.RECORD_AUDIO"/>
+    <!-- Routing the mic through a Bluetooth device ("Prefer Bluetooth mic") -->
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT"/>
     <uses-permission android:name="android.permission.WAKE_LOCK"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"/>
@@ -143,7 +145,6 @@
             </intent-filter>
         </receiver>
 
-        <!--
         <service
             android:name="androidx.work.impl.foreground.SystemForegroundService"
             android:foregroundServiceType="specialUse"
@@ -153,7 +154,6 @@
                 android:value="Neural network model training"/>
 
         </service>
-        -->
         <activity
             android:name=".payment.PaymentCompleteActivity"
             android:exported="true"

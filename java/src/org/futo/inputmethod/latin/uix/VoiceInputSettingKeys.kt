@@ -1,27 +1,10 @@
 package org.futo.inputmethod.latin.uix
 
 import androidx.datastore.preferences.core.booleanPreferencesKey
-import androidx.datastore.preferences.core.intPreferencesKey
-import androidx.datastore.preferences.core.stringSetPreferencesKey
 
 val ENABLE_SOUND = SettingsKey(
     key = booleanPreferencesKey("enable_sounds"),
     default = true
-)
-
-val VERBOSE_PROGRESS = SettingsKey(
-    key = booleanPreferencesKey("verbose_progress"),
-    default = false
-)
-
-val ENABLE_ENGLISH = SettingsKey(
-    key = booleanPreferencesKey("enable_english"),
-    default = true
-)
-
-val ENABLE_MULTILINGUAL = SettingsKey(
-    key = booleanPreferencesKey("enable_multilingual"),
-    default = false
 )
 
 val DISALLOW_SYMBOLS = SettingsKey(
@@ -44,26 +27,13 @@ val AUDIO_FOCUS = SettingsKey(
     default = true
 )
 
-// KBP: auto-stop on silence cut people off mid-thought — default OFF now.
-// Users who want it can re-enable in Voice Input settings.
+// KBP: auto-stop on silence. ON by default, but smarter than the old gate that
+// cut people off mid-thought: a ~3s silence window with countdown PLUS a ~1s
+// minimum-speech requirement (VadPolicy), and trailing non-speech is trimmed
+// from the final decode (TrailingTrimPolicy) so noise can't become garbage text.
 val USE_VAD_AUTOSTOP = SettingsKey(
     key = booleanPreferencesKey("use_vad_autostop"),
-    default = false
-)
-
-val ENGLISH_MODEL_INDEX = SettingsKey(
-    key = intPreferencesKey("english_model_index"),
-    default = 0
-)
-
-val MULTILINGUAL_MODEL_INDEX = SettingsKey(
-    key = intPreferencesKey("multilingual_model_index"),
-    default = 1
-)
-
-val LANGUAGE_TOGGLES = SettingsKey(
-    key = stringSetPreferencesKey("enabled_languages"),
-    default = setOf()
+    default = true
 )
 
 val USE_PERSONAL_DICT = SettingsKey(
@@ -73,5 +43,23 @@ val USE_PERSONAL_DICT = SettingsKey(
 
 val ANIMATE_BUBBLE = SettingsKey(
     key = booleanPreferencesKey("animate_bubble"),
+    default = true
+)
+
+// KBP: online punctuation+capitalization polish for final transcripts. Strictly
+// opt-in: defaults OFF, never blocks insertion, falls back to offline-processed
+// text on any failure.
+val POLISH_DICTATION_ONLINE = SettingsKey(
+    key = booleanPreferencesKey("polish_dictation_online"),
+    default = false
+)
+
+// KBP: keep the Parakeet engine resident and pre-load it when the keyboard
+// appears, so the first mic tap never pays the multi-second model load. This
+// is the same "always warm" behavior the Cornerstone Voice bubble gets from
+// being a foreground service. Costs ~600MB of RAM while the keyboard process
+// lives; turn off on a memory-starved device.
+val VOICE_KEEP_WARM = SettingsKey(
+    key = booleanPreferencesKey("voice_keep_engine_warm"),
     default = true
 )

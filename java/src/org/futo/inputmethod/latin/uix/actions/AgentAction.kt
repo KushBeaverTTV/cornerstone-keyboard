@@ -5,11 +5,7 @@ import android.util.Log
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import org.futo.inputmethod.latin.BuildConfig
 import androidx.datastore.preferences.core.stringPreferencesKey
-import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
-import okhttp3.Request
-import okhttp3.RequestBody.Companion.toRequestBody
-import org.json.JSONObject
 import org.futo.inputmethod.latin.R
 import org.futo.inputmethod.latin.SuggestedWords
 import org.futo.inputmethod.latin.SuggestedWords.SuggestedWordInfo
@@ -26,7 +22,8 @@ import java.util.concurrent.TimeUnit
 // Prototype endpoint, reached over plain HTTP inside the encrypted Tailscale
 // mesh (cleartext allowed for this host only, see res/xml/network_security_config.xml).
 // Change here if the endpoint moves. Custom agents default to this; a custom
-// agent may carry its own endpoint URL override (same Bearer contract).
+// agent may carry its own endpoint URL override — same request contract, but
+// the hub Bearer token is never sent to custom endpoints.
 // Endpoint injected at build time (local.properties, never committed).
 internal const val DEFAULT_AGENT_ENDPOINT = BuildConfig.AGENT_KEY_ENDPOINT
 
@@ -40,7 +37,7 @@ val AGENT_KEY_TOKEN = SettingsKey(
 // Which agent answers. Long-press the Agent key to switch.
 val AGENT_KEY_AGENT = SettingsKey(
     key = stringPreferencesKey("agent_key_agent"),
-    default = "kimi"
+    default = DEFAULT_AGENT_ID
 )
 
 // Whole-field mode: hub options act on the ENTIRE field (beforeCursor +
@@ -51,20 +48,27 @@ val AGENT_WHOLE_FIELD = SettingsKey(
     default = false
 )
 
-val AGENT_CHOICES = listOf("kimi" to "Kimi", "aurora" to "Aurora", "prima" to "Prima")
+// Built-in roster. Kaori is the one active agent: the Hermes "kaori" profile on
+// the PC, reached through hub-bridge/hub_bridge.py. The bridge routes any
+// unknown id (old "kimi"/"aurora"/"prima" settings, voice aliases) to her too.
+const val DEFAULT_AGENT_ID = "kaori"
+val AGENT_CHOICES = listOf(DEFAULT_AGENT_ID to "Kaori")
 
 // Shared with AgentHub.kt (same package) — the hub reuses the display name,
 // HTTP client, password guard, and POST helper rather than duplicating them.
 internal fun agentDisplayName(id: String): String =
-    AGENT_CHOICES.firstOrNull { it.first == id }?.second ?: "Kimi"
+    AGENT_CHOICES.firstOrNull { it.first == id }?.second ?: "Kaori"
 
 // Read timeout must exceed the hub's PC-bridge budget (BRIDGE_TIMEOUT=175s):
 // Aurora/Prima answers spawn a model process on kbp-hq and can legitimately
 // take ~3 minutes. 15s killed every bridge-agent request client-side while the
-// server was still working (seen on the emulator rig 2026-08-21).
+// server was still working (seen on the emulator rig 2026-08-21). callTimeout
+// caps the WHOLE call (connect + send + read) just past the read budget so a
+// stalled connection can't hang a request forever.
 internal val agentHttpClient = OkHttpClient.Builder()
     .connectTimeout(10, TimeUnit.SECONDS)
     .readTimeout(200, TimeUnit.SECONDS)
+    .callTimeout(210, TimeUnit.SECONDS)
     .build()
 
 internal fun isPasswordField(inputType: Int): Boolean {
@@ -78,33 +82,6 @@ internal fun isPasswordField(inputType: Int): Boolean {
                     variation == InputType.TYPE_NUMBER_VARIATION_PASSWORD)
 }
 
-// `draft` is the full text to send — callers compose any prompt into it first.
-// `endpoint` defaults to the shared hub; custom agents pass their override URL.
-internal fun postToAgent(
-    draft: String,
-    token: String,
-    agent: String,
-    endpoint: String = DEFAULT_AGENT_ENDPOINT
-): String? {
-    val body = JSONObject().put("text", draft).put("agent", agent).toString()
-        .toRequestBody("application/json; charset=utf-8".toMediaType())
-    val request = Request.Builder()
-        .url(endpoint)
-        .header("Authorization", "Bearer $token")
-        .post(body)
-        .build()
-
-    return try {
-        agentHttpClient.newCall(request).execute().use { response ->
-            if (!response.isSuccessful) return null
-            val responseBody = response.body?.string() ?: return null
-            JSONObject(responseBody).optString("answer").ifBlank { null }
-        }
-    } catch (e: Exception) {
-        Log.w("AgentAction", "agent request failed", e)
-        null
-    }
-}
 
 private fun showAnswerOnStrip(manager: KeyboardManagerForAction, answer: String): Boolean {
     // Strip can't show the answer when the IME doesn't implement the accessor
@@ -153,7 +130,12 @@ val AgentAction = Action(
             choices.map { (id, name) ->
                 DialogRequestItem(if (id == current) "✓ $name" else name) {
                     context.setSettingBlocking(AGENT_KEY_AGENT.key, id)
-                    showAnswerOnStrip(manager, "Agent: $name")
+                    // announce() fallback: the strip can refuse (suggestions off,
+                    // no accessor) — the switch must still be confirmed, never a
+                    // silent no-op.
+                    if (!showAnswerOnStrip(manager, "Agent: $name")) {
+                        manager.announce("Agent: $name")
+                    }
                 }
             },
             {}

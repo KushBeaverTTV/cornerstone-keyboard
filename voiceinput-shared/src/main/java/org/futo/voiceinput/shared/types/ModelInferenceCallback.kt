@@ -6,6 +6,5 @@ enum class InferenceState {
 
 interface ModelInferenceCallback {
     fun updateStatus(state: InferenceState)
-    fun languageDetected(language: Language)
     fun partialResult(string: String)
 }

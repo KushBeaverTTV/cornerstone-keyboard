@@ -14,6 +14,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
@@ -116,6 +117,10 @@ interface KeyboardManagerForAction {
     // Returns null if the current IME is not of this kind.
     // TODO: In the future make an IMEActionInterface for correctness
     fun getCurrentIME(): IMEInterface
+
+    fun isIncognitoContext(): Boolean
+
+    fun getCurrentEditorInfo(): android.view.inputmethod.EditorInfo?
 }
 
 enum class CloseResult {
@@ -127,6 +132,9 @@ enum class CloseResult {
 }
 
 abstract class ActionWindow {
+    open val windowBackgroundColor: Color?
+        get() = null
+
     open val onlyShowAboveKeyboard: Boolean
         get() = false
 

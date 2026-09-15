@@ -8,15 +8,12 @@ import org.futo.voiceinput.shared.types.ModelLoader
 class ModelManager(
     val context: Context
 ) {
-    private val loadedModels: HashMap<Any, SpeechEngine> = hashMapOf()
+    // Single-flight: concurrent callers racing the same model share one load.
+    private val loadedModels = EngineCache<Any, SpeechEngine>()
 
     fun obtainModel(model: ModelLoader): SpeechEngine {
         val key = model.key(context)
-        if (!loadedModels.contains(key)) {
-            loadedModels[key] = model.loadEngine(context)
-        }
-
-        return loadedModels[key]!!
+        return loadedModels.getOrLoad(key) { model.loadEngine(context) }
     }
 
     /**
@@ -25,11 +22,11 @@ class ModelManager(
      * takes seconds and must never happen on the audio path.
      */
     fun peekLoadedEngine(model: ModelLoader): SpeechEngine? {
-        return loadedModels[model.key(context)]
+        return loadedModels.peek(model.key(context))
     }
 
     fun cancelAll() {
-        loadedModels.forEach {
+        loadedModels.entries.forEach {
             it.value.cancel()
         }
     }

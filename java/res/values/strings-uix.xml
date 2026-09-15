@@ -392,7 +392,7 @@
     <string name="action_editor_add_next_action">Add next</string>
 
     <!-- Action settings -->
-    <string name="action_settings_title">Actions</string>
+    <string name="action_settings_title">Quick actions</string>
     <string name="action_settings_quick_options_title">Quick Options</string>
     <string name="action_settings_quick_option_enable_action_key">Enable action key</string>
     <string name="action_settings_quick_option_enable_action_key_subtitle_no_assignment">Show a key to the left of spacebar to quickly access an action. Enabling this will place an emoji key, but it can be customized in “Edit Actions“</string>
@@ -508,7 +508,7 @@
     <string name="keyboard_settings_hide_when_hardware_keyboard_is_connected">Hide when USB keyboard is detected</string>
 
     <!-- misc titles -->
-    <string name="settings_keyboard_typing_title">Keyboard &amp; Typing</string>
+    <string name="settings_keyboard_typing_title">Keys &amp; behavior</string>
 
     <!-- Theme, as in visual style -->
     <string name="theme_settings_title">Theme</string>
@@ -573,14 +573,12 @@
     <string name="swipe_settings_use_old_swipe_subtitle">The legacy algorithm is very inaccurate and not recommended. If you have to use this, please tell us why at keyboard@futo.org. This option will be removed in the future.</string>
 
     <!-- Voice input settings menu -->
-    <string name="voice_input_settings_title">Voice Input</string>
+    <string name="voice_input_settings_title">Cornerstone Voice</string>
     <string name="voice_input_settings_builtin_disabled_notice">Built-in voice input is disabled!</string>
     <string name="voice_input_settings_disable_builtin_voice_input">Disable built-in voice input</string>
     <string name="voice_input_settings_disable_builtin_voice_input_subtitle">Use voice input provided by external app</string>
     <string name="voice_input_settings_indication_sounds">Indication sounds</string>
     <string name="voice_input_settings_indication_sounds_subtitle">Play a short sound on start and cancel</string>
-    <string name="voice_input_settings_verbose_progress">Verbose progress</string>
-    <string name="voice_input_settings_verbose_progress_subtitle">Display additional information, such as mic being used</string>
     <string name="voice_input_settings_use_personal_dict">Personal Dictionary for Voice</string>
     <string name="voice_input_settings_use_personal_dict_subtitle">Whether or not to use the personal dictionary for voice input</string>
     <string name="voice_input_settings_use_bluetooth_mic">Prefer Bluetooth Mic</string>
@@ -592,14 +590,18 @@
     <string name="voice_input_settings_long_form">Long-form voice input</string>
     <string name="voice_input_settings_long_form_subtitle">If disabled, voice input will auto-stop after 30 seconds.</string>
     <string name="voice_input_settings_autostop_vad">Auto-stop on silence</string>
-    <string name="voice_input_settings_autostop_vad_subtitle">Automatically stop when silence is detected. You may need to manually stop regardless if there\'s too much background noise.</string>
+    <string name="voice_input_settings_autostop_vad_subtitle">Stop about 3 seconds after you go quiet, with a countdown. You may need to manually stop regardless if there\'s too much background noise.</string>
+    <string name="voice_input_settings_keep_warm">Keep voice engine ready</string>
+    <string name="voice_input_settings_keep_warm_subtitle">Load the on-device speech model when the keyboard appears so dictation starts instantly. Uses about 600 MB of memory while the keyboard is running.</string>
     <string name="voice_input_settings_animate_bubble">Animations</string>
     <string name="voice_input_settings_animate_bubble_subtitle">Display a bubble that reacts to speech</string>
+    <string name="voice_input_settings_polish_dictation_online">Polish dictation online</string>
+    <string name="voice_input_settings_polish_dictation_online_subtitle">Send final transcripts to the agent to restore punctuation and capitalization (uses network)</string>
     <string name="voice_input_settings_change_models">Models</string>
     <string name="voice_input_settings_change_models_subtitle">To change the models, visit Languages &amp; Models menu</string>
 
     <!-- Prediction menu -->
-    <string name="prediction_settings_title">Text Prediction</string>
+    <string name="prediction_settings_title">Text prediction</string>
     <string name="prediction_settings_transformer">Transformer LM</string>
     <string name="prediction_settings_transformer_finetuning">Transformer fine-tuning</string>
     <string name="prediction_settings_transformer_finetuning_subtitle">May kill your battery if enabled! This feature is pending more work</string>
@@ -641,10 +643,10 @@
     <string name="setup_step_1">Setup - Step 1</string>
     <string name="setup_step_2">Setup - Step 2</string>
     <string name="setup_step_3">Setup - Step 3</string>
-    <string name="setup_welcome_text">Welcome to FUTO Keyboard! It\'s still being developed so it may lack certain features or languages. We appreciate your patience and understanding.\n\nTo get started, enable FUTO Keyboard as an input method.</string>
+    <string name="setup_welcome_text">Welcome to Cornerstone Keyboard.\n\nTo get started, enable Cornerstone Keyboard as an input method.</string>
     <string name="setup_open_input_settings">Open Input Method Settings</string>
     <string name="setup_warning_multiple_versions">Warning: You seem to have both Play Store and Standalone versions installed, we only recommend installing one</string>
-    <string name="setup_active_input_method">Please select FUTO Keyboard as your active input method.</string>
+    <string name="setup_active_input_method">Select Cornerstone Keyboard as your active input method.</string>
     <string name="setup_switch_input_methods">Switch Input Methods</string>
 
     <!-- Credits menu -->
@@ -715,4 +717,36 @@ Default is %1$s</string>
     <!-- Wave 2 daily-driver actions -->
     <string name="action_quick_clipboard_title">Quick Clipboard</string>
     <string name="action_text_expansion_title">Text Expansion</string>
+    <string name="action_device_title">Device</string>
+    <string name="settings_agents_title">AI assistants</string>
+    <string name="settings_agents_token_title">Agent token</string>
+    <string name="settings_agents_token_subtitle">Used for Kaori (the Hermes agent on your PC). Never sent to custom endpoints.</string>
+
+    <!-- GIF picker (GIPHY / Klipy) -->
+    <string name="action_gif_title">GIFs</string>
+    <string name="action_gif_search_hint_giphy">Search GIPHY</string>
+    <!-- Required exact placeholder per Klipy\'s attribution terms -->
+    <string name="action_gif_search_hint_klipy">Search KLIPY</string>
+    <string name="action_gif_no_api_key">GIF search needs an API key. Add GIPHY_API_KEY or KLIPY_API_KEY to local.properties and rebuild.</string>
+    <string name="action_gif_provider_fallback">No %1$s key configured — using %2$s</string>
+    <string name="action_gif_powered_by">Powered by %1$s</string>
+    <string name="action_gif_unsupported_field">This app doesn\'t support GIFs here</string>
+    <string name="action_gif_error_network">Couldn\'t load GIFs. Check your connection.</string>
+    <string name="action_gif_retry">Retry</string>
+    <string name="action_gif_no_results">No GIFs found</string>
+    <string name="action_gif_loading">Loading…</string>
+
+    <!-- AI autocorrect: one-tap agent fix for the just-finished sentence -->
+    <string name="ai_autocorrect_title">AI autocorrect suggestions</string>
+    <string name="ai_autocorrect_subtitle">After you finish a sentence, show a one-tap AI fix in the suggestion strip. The sentence is sent to your agent server.</string>
+    <string name="ai_autocorrect_chip_label">✨ Fix with AI</string>
+    <string name="ai_autocorrect_field_changed">Text changed — AI fix cancelled</string>
+    <string name="on_device_llm_correction_title">On-device LLM correction</string>
+    <string name="on_device_llm_correction_subtitle">Correct dictation and the Fix chip entirely on your phone. Dictation shows a notice after every local attempt, so you know whether it ran. The verified model is bundled; first use prepares it in private storage.</string>
+    <string name="on_device_uncertainty_warning">Review before sending: %1$s</string>
+    <string name="on_device_dictation_applied">Cornerstone on-device polish applied</string>
+    <string name="on_device_dictation_no_change">Cornerstone on-device polish ran — no change</string>
+    <string name="on_device_dictation_applied_review">Cornerstone on-device polish applied — review: %1$s</string>
+    <string name="on_device_dictation_skipped">Cornerstone on-device polish did not apply (%1$s)</string>
 </resources>
+

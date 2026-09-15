@@ -108,6 +108,7 @@ import org.futo.inputmethod.latin.uix.actions.throwIfDebug
 import org.futo.inputmethod.latin.uix.getSetting
 import org.futo.inputmethod.latin.uix.getSettingBlocking
 import org.futo.inputmethod.latin.uix.getUnlockedSetting
+import org.futo.inputmethod.latin.uix.IncognitoState
 import org.futo.inputmethod.latin.uix.isDirectBootUnlocked
 import org.futo.inputmethod.latin.uix.setSetting
 import org.futo.inputmethod.latin.uix.settings.ScrollableList
@@ -582,6 +583,7 @@ class ClipboardHistoryManager(val context: Context, val coroutineScope: Lifecycl
     private val primaryClipChangedListener = object : ClipboardManager.OnPrimaryClipChangedListener {
             override fun onPrimaryClipChanged() {
                 if (!context.getSettingBlocking(ClipboardHistoryEnabled)) return
+                if (IncognitoState.active) return
 
                 val clip = try {
                     clipboardManager.primaryClip

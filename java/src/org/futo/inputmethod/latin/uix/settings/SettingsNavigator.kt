@@ -58,6 +58,7 @@ import org.futo.inputmethod.latin.uix.settings.pages.SelectLanguageScreen
 import org.futo.inputmethod.latin.uix.settings.pages.SelectLayoutsScreen
 import org.futo.inputmethod.latin.uix.settings.pages.SwipeMenu
 import org.futo.inputmethod.latin.uix.settings.pages.TypingSettingsMenu
+import org.futo.inputmethod.latin.uix.settings.pages.AgentsMenu
 import org.futo.inputmethod.latin.uix.settings.pages.VoiceInputMenu
 import org.futo.inputmethod.latin.uix.settings.pages.addModelManagerNavigation
 import org.futo.inputmethod.latin.uix.settings.pages.buggyeditors.BuggyTextEditVariations
@@ -106,6 +107,7 @@ val SettingsMenus = listOf(
     PredictiveTextMenu,
     BlacklistScreenLite,
     VoiceInputMenu,
+    AgentsMenu,
     ActionsScreen,
     HelpMenu,
     MiscMenu,

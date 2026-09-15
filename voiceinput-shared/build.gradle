@@ -69,6 +69,40 @@ final def translationsWithoutEngValues = { final String path ->
     destDir
 }
 
+// sherpa-onnx AAR (fork dependency — NOT part of FUTO's libs submodule, which
+// we cannot push to). Fetched from the official k2-fsa GitHub release and
+// verified against a pinned SHA-256, so a fresh clone builds with no manual
+// step. Pin captured 2026-08-26; the file previously on disk is byte-identical.
+final def sherpaAarFile = rootProject.file('libs-fork/sherpa-onnx-1.13.6.aar')
+final def sherpaAarUrl = 'https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.6/sherpa-onnx-1.13.6.aar'
+final def sherpaAarSha256 = '0012d9a28f15bd6fb966b62b70a75da3990512fdccce28b83098248ce4be1698'
+tasks.register('fetchSherpaOnnxAar') {
+    onlyIf { !sherpaAarFile.exists() }
+    outputs.file(sherpaAarFile)
+    doLast {
+        def tmp = new File(sherpaAarFile.parentFile, sherpaAarFile.name + '.download')
+        logger.lifecycle("libs-fork/sherpa-onnx-1.13.6.aar missing - downloading from k2-fsa GitHub release")
+        tmp.withOutputStream { os ->
+            new URL(sherpaAarUrl).openStream().withCloseable { is -> os << is }
+        }
+        def digest = java.security.MessageDigest.getInstance('SHA-256')
+        tmp.withInputStream { is ->
+            def buf = new byte[1 << 20]
+            int read
+            while ((read = is.read(buf)) >= 0) digest.update(buf, 0, read)
+        }
+        def actual = digest.digest().encodeHex().toString()
+        if (actual != sherpaAarSha256) {
+            tmp.delete()
+            throw new GradleException("sherpa-onnx AAR SHA-256 mismatch: expected $sherpaAarSha256, got $actual")
+        }
+        if (!tmp.renameTo(sherpaAarFile)) {
+            throw new GradleException("Could not move $tmp into place as $sherpaAarFile")
+        }
+    }
+}
+preBuild.dependsOn('fetchSherpaOnnxAar')
+
 android {
     buildFeatures {
         buildConfig true
@@ -146,4 +180,7 @@ dependencies {
     implementation 'com.squareup.okhttp3:okhttp:4.11.0'
 
     implementation 'org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.1'
+
+    testImplementation 'junit:junit:4.13.2'
+    testImplementation 'org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3'
 }

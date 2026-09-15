@@ -1,5 +1,8 @@
 package org.futo.voiceinput.shared.ggml
 
+import org.futo.voiceinput.shared.FinishPolicy
+import android.os.SystemClock
+import android.util.Log
 import com.k2fsa.sherpa.onnx.FeatureConfig
 import com.k2fsa.sherpa.onnx.OfflineModelConfig
 import com.k2fsa.sherpa.onnx.OfflineRecognizer
@@ -77,18 +80,26 @@ class ParakeetSherpa(
     private val engineConfig: ParakeetEngineConfig = ParakeetEngineConfig()
 ) : SpeechEngine {
 
-    private val recognizer: OfflineRecognizer
+    companion object {
+        private const val TAG = "ParakeetSherpa"
+    }
+
+    /**
+     * Single OfflineRecognizer. Final and partial both use greedy_search
+     * (FinishPolicy.FINAL_DECODING_METHOD). The second ~600MB beam instance was
+     * the stop-button pinwheel; the bubble never paid that cost.
+     */
+    private val greedyRecognizer: OfflineRecognizer
 
     @Volatile
     private var cancelled: Boolean = false
 
-    // Incremented on every cancel(); a partial decode captures it at entry and
+    // Invalidated on every cancel(); a partial decode captures it at entry and
     // discards its result if it changed mid-flight. Unlike [cancelled] (which
     // infer() resets per final decode), this survives session boundaries, so a
     // stale partial from a cancelled recording can never deliver text into the
-    // next session.
-    @Volatile
-    private var cancelGeneration: Int = 0
+    // next session. Atomic increments avoid losing concurrent invalidations.
+    private val cancellationEpoch = CancellationEpoch()
 
     @Volatile
     private var closed: Boolean = false
@@ -111,30 +122,34 @@ class ParakeetSherpa(
         val tokens = dir.listFiles()?.firstOrNull { it.isFile && it.name == "tokens.txt" }
             ?: throw InvalidParakeetModelException("missing tokens.txt in ${dir.absolutePath}")
 
-        val config = OfflineRecognizerConfig(
-            featConfig = FeatureConfig(
-                sampleRate = engineConfig.sampleRate,
-                featureDim = engineConfig.featureDim
+        val modelConfig = OfflineModelConfig(
+            transducer = OfflineTransducerModelConfig(
+                encoder = encoder.absolutePath,
+                decoder = decoder.absolutePath,
+                joiner = joiner.absolutePath
             ),
-            modelConfig = OfflineModelConfig(
-                transducer = OfflineTransducerModelConfig(
-                    encoder = encoder.absolutePath,
-                    decoder = decoder.absolutePath,
-                    joiner = joiner.absolutePath
-                ),
-                tokens = tokens.absolutePath,
-                numThreads = engineConfig.numThreads,
-                debug = false,
-                provider = "cpu",
-                modelType = engineConfig.modelType
-            ),
-            decodingMethod = "greedy_search"
+            tokens = tokens.absolutePath,
+            numThreads = engineConfig.numThreads,
+            debug = false,
+            provider = "cpu",
+            modelType = engineConfig.modelType
+        )
+
+        val featConfig = FeatureConfig(
+            sampleRate = engineConfig.sampleRate,
+            featureDim = engineConfig.featureDim
+        )
+
+        val greedyConfig = OfflineRecognizerConfig(
+            featConfig = featConfig,
+            modelConfig = modelConfig,
+            decodingMethod = FinishPolicy.FINAL_DECODING_METHOD
         )
 
         try {
-            recognizer = OfflineRecognizer(assetManager = null, config = config)
+            greedyRecognizer = OfflineRecognizer(assetManager = null, config = greedyConfig)
         } catch (e: Throwable) {
-            throw InvalidParakeetModelException("OfflineRecognizer construction failed: ${e.message}")
+            throw InvalidParakeetModelException("greedy OfflineRecognizer construction failed: ${e.message}")
         }
     }
 
@@ -175,14 +190,18 @@ class ParakeetSherpa(
 
         cancelled = false
 
-        val stream = recognizer.createStream()
+        val stream = greedyRecognizer.createStream()
         try {
             stream.acceptWaveform(samples, engineConfig.sampleRate)
-            recognizer.decode(stream)
+
+            val decodeStartMs = SystemClock.elapsedRealtime()
+            greedyRecognizer.decode(stream)
+            val decodeElapsedMs = SystemClock.elapsedRealtime() - decodeStartMs
+            Log.i(TAG, "final decode ${FinishPolicy.FINAL_DECODING_METHOD} took ${decodeElapsedMs}ms")
 
             if (cancelled) throw InferenceCancelledException()
 
-            val result = recognizer.getResult(stream).text.trim()
+            val result = greedyRecognizer.getResult(stream).text.trim()
 
             if (cancelled) throw InferenceCancelledException()
 
@@ -192,58 +211,39 @@ class ParakeetSherpa(
 
             return@withContext result
         } finally {
-            stream.release()
+            try { stream.release() } catch (e: Throwable) { Log.e(TAG, "greedy final stream release failed", e) }
         }
     }
 
     /**
-     * Streaming-partial decode: re-decodes the audio accumulated so far and pushes
-     * the transcript through [partialResultCallback], so text appears while the
-     * user is still speaking.
+     * Streaming-partial decode over one bounded audio snapshot.
      *
-     * sherpa-onnx's OfflineRecognizer has no incremental decode, so each partial
-     * is a full createStream/acceptWaveform/decode/getResult/release cycle over
-     * the buffer snapshot — O(audio length) per tick, called at most every
-     * ~800ms by AudioRecognizer and skipped entirely while a previous partial is
-     * still running (try-gate), so partial work can never pile up on the
-     * inference thread.
-     *
-     * Cancel-safety: if cancel() was called after this decode started, the result
-     * is silently discarded (cancelGeneration changed). No callback, no text.
-     *
-     * Leak-safety: every created stream is released in finally.
-     *
-     * @return true if a decode actually ran, false if skipped (busy/closed/empty).
+     * @return null when skipped/cancelled, an empty string when a decode completed
+     * to silence, or nonblank transcript text when speech was recognized. Keeping
+     * completed silence distinct from skipped work lets the scheduler advance
+     * audio coverage without inventing text.
      */
-    suspend fun inferPartial(
-        samples: FloatArray,
-        partialResultCallback: (String) -> Unit
-    ): Boolean = withContext(inferenceContext) {
+    suspend fun inferPartial(samples: FloatArray): String? = withContext(inferenceContext) {
         // All checks run ON the inference thread: close() also runs there, so a
         // closed recognizer can never be touched by a queued partial.
-        if (closed || samples.isEmpty()) return@withContext false
-        if (!partialDecodeBusy.compareAndSet(false, true)) return@withContext false
+        if (closed || samples.isEmpty()) return@withContext null
+        if (!partialDecodeBusy.compareAndSet(false, true)) return@withContext null
 
-        val generationAtEntry = cancelGeneration
+        val generationAtEntry = cancellationEpoch.current()
         try {
-            val stream = recognizer.createStream()
+            val stream = greedyRecognizer.createStream()
             try {
                 stream.acceptWaveform(samples, engineConfig.sampleRate)
-                recognizer.decode(stream)
+                greedyRecognizer.decode(stream)
 
-                if (cancelGeneration != generationAtEntry) return@withContext false
+                if (!cancellationEpoch.isCurrent(generationAtEntry)) return@withContext null
 
-                val result = recognizer.getResult(stream).text.trim()
+                val result = greedyRecognizer.getResult(stream).text.trim()
 
-                if (cancelGeneration != generationAtEntry) return@withContext false
-
-                if (result.isNotEmpty()) {
-                    partialResultCallback(result)
-                }
-
-                return@withContext true
+                if (!cancellationEpoch.isCurrent(generationAtEntry)) return@withContext null
+                return@withContext result
             } finally {
-                stream.release()
+                try { stream.release() } catch (e: Throwable) { Log.e(TAG, "greedy stream release failed", e) }
             }
         } finally {
             // The gate is released even if createStream() throws — a stuck gate
@@ -256,14 +256,14 @@ class ParakeetSherpa(
         // No native cancel for offline decode; results are discarded on return.
         // Bumping the generation also invalidates any in-flight partial decode.
         cancelled = true
-        cancelGeneration++
+        cancellationEpoch.invalidate()
     }
 
     override suspend fun close() = withContext(inferenceContext) {
         if (!closed) {
             try {
-                recognizer.release()
-            } catch (_: Throwable) { }
+                greedyRecognizer.release()
+            } catch (e: Throwable) { Log.e(TAG, "greedy release failed", e) }
         }
         closed = true
     }

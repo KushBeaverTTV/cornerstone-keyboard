@@ -1,0 +1,7 @@
+{
+  "_comment": "Roster the keyboard's Agent Hub shows. Kaori is the only active agent: the Hermes 'kaori' profile, whose gateway runs the OpenAI-compatible API server on 127.0.0.1:8643 (HERMES_URL in hub-bridge.env). 'system' overrides the keyboard persona; 'model' overrides Hermes' model alias.",
+  "system_prompt": "You are answering from inside a phone keyboard (Cornerstone Keyboard). Your reply is inserted directly into the text field the user is typing in. Reply with only the text to insert: no preamble, no explanations, no markdown, no sign-off. Be concise. If the request is a rewrite, return only the rewritten text.",
+  "agents": {
+    "kaori": { "name": "Kaori", "role": "Personal presence agent (Hermes, on the PC)" }
+  }
+}

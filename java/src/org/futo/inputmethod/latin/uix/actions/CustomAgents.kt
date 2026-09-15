@@ -21,7 +21,8 @@ val CUSTOM_AGENTS = SettingsKey(
 /**
  * A user-defined agent. `endpoint` blank means the shared hub endpoint
  * (DEFAULT_AGENT_ENDPOINT); a non-blank value is a full URL override that
- * still uses the same Bearer-token request contract as postToAgent.
+ * receives the same request contract as the hub but WITHOUT the hub Bearer
+ * token — no Authorization header is sent to custom hosts.
  */
 internal data class CustomAgent(
     val id: String,
