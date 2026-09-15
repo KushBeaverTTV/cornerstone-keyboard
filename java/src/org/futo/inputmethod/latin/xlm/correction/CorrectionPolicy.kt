@@ -1,5 +1,7 @@
 package org.futo.inputmethod.latin.xlm.correction
 
+import java.text.Normalizer
+
 sealed class CorrectionOutcome {
     data class Applied(val prediction: String, val uncertain: List<String>) : CorrectionOutcome()
     data class Unchanged(val reason: String) : CorrectionOutcome()
@@ -66,6 +68,7 @@ object CorrectionPolicy {
         if (explicitAmbiguity.containsMatchIn(raw)) uncertainty += "ambiguous wording"
         if (numberWords.containsMatchIn(raw)) uncertainty += "number wording"
         uncertainty += suspiciousLexicalChanges(raw, parsed.prediction)
+        uncertainty += diacriticAdditions(raw, parsed.prediction)
 
         return CorrectionOutcome.Applied(
             parsed.prediction,
@@ -94,6 +97,22 @@ object CorrectionPolicy {
             .map { "changed '$it'" }
             .toList()
     }
+
+    private fun diacriticAdditions(raw: String, prediction: String): List<String> {
+        val rawTokens = token.findAll(raw.lowercase()).map { it.value }.toSet()
+        val rawFolded = rawTokens.map(::stripDiacritics).toSet()
+        return token.findAll(prediction.lowercase())
+            .map { it.value }
+            .distinct()
+            .filter { stripDiacritics(it) != it }
+            .filter { it !in rawTokens && stripDiacritics(it) in rawFolded }
+            .take(2)
+            .map { "added diacritic '$it'" }
+            .toList()
+    }
+
+    private fun stripDiacritics(value: String): String =
+        Normalizer.normalize(value, Normalizer.Form.NFD).replace(Regex("\\p{Mn}+"), "")
 
     private fun editDistance(a: String, b: String): Int {
         if (a == b) return 0

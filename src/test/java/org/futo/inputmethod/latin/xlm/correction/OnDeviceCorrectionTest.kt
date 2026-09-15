@@ -166,6 +166,32 @@ class OnDeviceCorrectionTest {
     }
 
     @Test
+    fun `diacritics the speaker did not say are surfaced for review`() {
+        val result = CorrectionPolicy.decide(
+            enabled = true,
+            raw = "kaori sent the report",
+            modelOutput = """{"prediction":"Kāori sent the report.","uncertain":[]}""",
+            timedOut = false,
+            generation = 11L,
+            currentGeneration = 11L,
+        ) as CorrectionOutcome.Applied
+        assertTrue(result.uncertain.any { "kāori" in it })
+    }
+
+    @Test
+    fun `diacritics already present in raw are not flagged again`() {
+        val result = CorrectionPolicy.decide(
+            enabled = true,
+            raw = "meet me at the café",
+            modelOutput = """{"prediction":"Meet me at the café.","uncertain":[]}""",
+            timedOut = false,
+            generation = 12L,
+            currentGeneration = 12L,
+        ) as CorrectionOutcome.Applied
+        assertTrue(result.uncertain.none { "diacritic" in it })
+    }
+
+    @Test
     fun `prompt carries the product glossary and the manual chat template`() {
         val prompt = OnDeviceCorrection.wrapPrompt("the quinn v six checkpoint passed")
         assertTrue(prompt.startsWith("<|im_start|>user\n"))
