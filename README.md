@@ -24,7 +24,7 @@ Recursive clone, then:
 
 `libs/` is the upstream FUTO `android-libs` submodule (comes with the recursive clone). The one fork-added binary, `libs-fork/sherpa-onnx-1.13.6.aar`, is downloaded automatically by Gradle (`fetchSherpaOnnxAar`, SHA-256 pinned) from the official [k2-fsa sherpa-onnx release](https://github.com/k2-fsa/sherpa-onnx/releases/tag/v1.13.6) when missing.
 
-The self-contained build also stages the hash-pinned `cornerstone-v6-Q4_K_M.gguf` from `C:/Cornerstone/model-lab/models/`. Set `CORNERSTONE_MODEL_PATH` when building elsewhere. The build fails closed if the file is missing or its size/SHA-256 does not match; it never emits a deceptively model-less APK.
+The self-contained build also stages the hash-pinned `cornerstone-v7-Q4_K_M.gguf` from `C:/Cornerstone/model-lab/models/`. Set `CORNERSTONE_MODEL_PATH` when building elsewhere. The build fails closed if the file is missing or its size/SHA-256 does not match; it never emits a deceptively model-less APK.
 
 Agent endpoint and debug token are injected from `local.properties` (`AGENT_KEY_ENDPOINT`, `AGENT_KEY_TOKEN`, optional `AGENT_KEY_AGENT`, optional `GIPHY_API_KEY` / `KLIPY_API_KEY` for the GIF picker). Never commit those values.
 

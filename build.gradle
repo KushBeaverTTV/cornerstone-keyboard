@@ -129,9 +129,9 @@ def getBranch = { ->
 // must be self-contained. Stage the hash-pinned GGUF as a generated asset and
 // fail the build rather than silently shipping a keyboard whose on-device toggle
 // can never work.
-def cornerstoneModelName = 'cornerstone-v6-Q4_K_M.gguf'
+def cornerstoneModelName = 'cornerstone-v7-Q4_K_M.gguf'
 def cornerstoneModelBytes = 529297184L
-def cornerstoneModelSha256 = '85873ebdde3d8ef34cf75642aa7f1464104aff1bbe8c2e7bd5754ca760f8c802'
+def cornerstoneModelSha256 = '171ac5d495a623f51bfe414ad1b51cb537d9650ddc854a25b51a1ed7efb3300b'
 def cornerstoneModelSource = file(
         System.getenv('CORNERSTONE_MODEL_PATH') ?: 'C:/Cornerstone/model-lab/models/' + cornerstoneModelName
 )
@@ -175,6 +175,9 @@ tasks.register('prepareCornerstoneModelAsset') {
                 cornerstoneModelOutput.toPath(),
                 java.nio.file.StandardCopyOption.REPLACE_EXISTING
         )
+        cornerstoneModelOutput.parentFile.eachFileMatch(~/.*\.gguf/) { stale ->
+            if (stale.name != cornerstoneModelName) stale.delete()
+        }
     }
 }
 
