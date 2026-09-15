@@ -153,6 +153,19 @@ class OnDeviceCorrectionTest {
     }
 
     @Test
+    fun `new profanity cannot be introduced from an ambiguous euphemism`() {
+        val result = CorrectionPolicy.decide(
+            enabled = true,
+            raw = "tell him to shut the front door",
+            modelOutput = """{"prediction":"Tell him to shut the fuck up.","uncertain":[]}""",
+            timedOut = false,
+            generation = 10L,
+            currentGeneration = 10L,
+        )
+        assertEquals(CorrectionOutcome.Unchanged("introduced_profanity"), result)
+    }
+
+    @Test
     fun `generation owner rejects a second in-flight launch and invalidates on cancel`() {
         val owner = CorrectionGenerationOwner()
         val first = owner.tryBegin()

@@ -46,8 +46,15 @@ object CorrectionPolicy {
         if (negation.findAll(raw).count() != negation.findAll(parsed.prediction).count()) {
             return CorrectionOutcome.Unchanged("negation")
         }
-        if (profanity.findAll(raw).map { it.value.lowercase() }.toSet().any { it !in parsed.prediction.lowercase() }) {
+        val rawLower = raw.lowercase()
+        val predictionLower = parsed.prediction.lowercase()
+        val rawProfanity = profanity.findAll(raw).map { it.value.lowercase() }.toSet()
+        val predictionProfanity = profanity.findAll(parsed.prediction).map { it.value.lowercase() }.toSet()
+        if (rawProfanity.any { it !in predictionLower }) {
             return CorrectionOutcome.Unchanged("profanity")
+        }
+        if (predictionProfanity.any { it !in rawLower }) {
+            return CorrectionOutcome.Unchanged("introduced_profanity")
         }
         val rawDigits = Regex("\\d+").findAll(raw).map { it.value }.toList()
         if (rawDigits.isNotEmpty() && rawDigits != Regex("\\d+").findAll(parsed.prediction).map { it.value }.toList()) {
