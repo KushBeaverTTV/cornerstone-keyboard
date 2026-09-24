@@ -9,9 +9,9 @@ Keyboard contract (see java/.../uix/actions/HubRepository.kt):
   GET  {base}/health                                                       -> {"service", "status", "hermes"}
 
 Hermes side: the OpenAI-compatible API server a `hermes gateway` runs
-(POST /v1/chat/completions, Bearer API_SERVER_KEY). Kaori is the Hermes
-"kaori" profile, whose gateway serves 127.0.0.1:8643; the default profile's
-gateway serves 8642. HERMES_URL / HERMES_ENV_FILE in the env file pick one.
+(POST /v1/chat/completions, Bearer API_SERVER_KEY). The default Hermes
+gateway serves 127.0.0.1:8642. HERMES_URL / HERMES_ENV_FILE in the env
+file pick the endpoint and credentials.
 
 Standard library only, so it runs on the portable CPython under
 C:\\Cornerstone\\tools\\python with no installs. Configuration comes from an
@@ -36,7 +36,7 @@ from pathlib import Path
 
 SERVICE_NAME = "cornerstone-hub-bridge"
 DEFAULT_ENV_FILE = r"C:\Cornerstone\Cornerstone_Secrets\hub-bridge.env"
-DEFAULT_HERMES_ENV = os.path.join(os.environ.get("LOCALAPPDATA", ""), "hermes", "profiles", "kaori", ".env")
+DEFAULT_HERMES_ENV = os.path.join(os.environ.get("LOCALAPPDATA", ""), "hermes", ".env")
 DEFAULT_LOG_DIR = os.path.join(os.environ.get("LOCALAPPDATA", "."), "CornerstoneHubBridge")
 
 # The keyboard inserts the answer straight into a text field, so the default
@@ -84,7 +84,7 @@ class Config:
         self.bind = get("HUB_BIND", "0.0.0.0")
         self.port = int(get("HUB_PORT", "8899"))
         self.token = get("HUB_TOKEN", "")
-        self.hermes_url = get("HERMES_URL", "http://127.0.0.1:8643").rstrip("/")
+        self.hermes_url = get("HERMES_URL", "http://127.0.0.1:8642").rstrip("/")
         self.hermes_model = get("HERMES_MODEL", "")  # blank = Hermes' virtual default
         self.hermes_timeout = float(get("HERMES_TIMEOUT_SECONDS", "180"))
         self.log_dir = get("HUB_LOG_DIR", DEFAULT_LOG_DIR)
