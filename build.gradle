@@ -133,7 +133,7 @@ def cornerstoneModelName = 'Qwen3.5-0.8B-Q4_K_M.gguf'
 def cornerstoneModelBytes = 532517120L
 def cornerstoneModelSha256 = 'bd258782e35f7f458f8aced1adc053e6e92e89bc735ba3be89d38a06121dc517'
 def cornerstoneModelSource = file(
-        System.getenv('CORNERSTONE_MODEL_PATH') ?: 'C:/Cornerstone/model-lab/models/' + cornerstoneModelName
+        System.getenv('CORNERSTONE_MODEL_PATH') ?: ('models/' + cornerstoneModelName)
 )
 def cornerstoneModelAssets = file("$buildDir/generated/cornerstone-model-assets")
 def cornerstoneModelOutput = file("$cornerstoneModelAssets/models/$cornerstoneModelName")
