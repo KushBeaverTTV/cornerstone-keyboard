@@ -173,7 +173,10 @@ dependencies {
     implementation 'androidx.datastore:datastore-preferences:1.1.1'
 
     implementation(name:'vad-release', ext:'aar')
-    implementation(name:'sherpa-onnx-1.13.6', ext:'aar')
+    // KBP: provider-backed so a fresh clone fetches before dependency
+    // resolution. A plain name/ext lookup resolves at configure time and
+    // fails on a clone where the fetch task has not run yet.
+    implementation files(sherpaAarFile).builtBy(tasks.named('fetchSherpaOnnxAar'))
 
     // OkHttp for ParakeetModelDownloader (on-device model download over Tailscale).
     // Version matches the app module's dependency in the root build.gradle.
