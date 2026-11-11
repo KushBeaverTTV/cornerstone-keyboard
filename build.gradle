@@ -129,9 +129,9 @@ def getBranch = { ->
 // must be self-contained. Stage the hash-pinned GGUF as a generated asset and
 // fail the build rather than silently shipping a keyboard whose on-device toggle
 // can never work.
-def cornerstoneModelName = 'cornerstone-v7-Q4_K_M.gguf'
-def cornerstoneModelBytes = 529297184L
-def cornerstoneModelSha256 = '171ac5d495a623f51bfe414ad1b51cb537d9650ddc854a25b51a1ed7efb3300b'
+def cornerstoneModelName = 'Qwen3.5-0.8B-Q4_K_M.gguf'
+def cornerstoneModelBytes = 532517120L
+def cornerstoneModelSha256 = 'bd258782e35f7f458f8aced1adc053e6e92e89bc735ba3be89d38a06121dc517'
 def cornerstoneModelSource = file(
         System.getenv('CORNERSTONE_MODEL_PATH') ?: 'C:/Cornerstone/model-lab/models/' + cornerstoneModelName
 )

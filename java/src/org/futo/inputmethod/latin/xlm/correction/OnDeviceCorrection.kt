@@ -21,10 +21,10 @@ val ON_DEVICE_LLM_CORRECTION = SettingsKey(
 private const val TAG = "OnDeviceCorrection"
 private const val TIMEOUT_MS = 12_000L
 private const val N_PREDICT = 120
-const val ON_DEVICE_MODEL_FILENAME = "cornerstone-v7-Q4_K_M.gguf"
+const val ON_DEVICE_MODEL_FILENAME = "Qwen3.5-0.8B-Q4_K_M.gguf"
 private const val MODEL_ASSET_PATH = "models/$ON_DEVICE_MODEL_FILENAME"
-private const val MODEL_BYTES = 529_297_184L
-private const val MODEL_SHA256 = "171ac5d495a623f51bfe414ad1b51cb537d9650ddc854a25b51a1ed7efb3300b"
+private const val MODEL_BYTES = 532_517_120L
+private const val MODEL_SHA256 = "bd258782e35f7f458f8aced1adc053e6e92e89bc735ba3be89d38a06121dc517"
 private const val TIMEOUT_SENTINEL = "__CORNERSTONE_TIMEOUT__"
 private const val STATUS_PREFS = "cornerstone_correction_status"
 
@@ -37,7 +37,7 @@ enum class CorrectionModelReadiness {
 data class CorrectionModelStatus(
     val readiness: CorrectionModelReadiness,
     val bytes: Long,
-    val displayName: String = "Cornerstone v7",
+    val displayName: String = "Cornerstone v8",
     val modelFamily: String = "Qwen3.5-0.8B · Q4_K_M",
 )
 

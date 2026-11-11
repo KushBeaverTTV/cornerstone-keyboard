@@ -17,3 +17,4 @@ java/src/org/futo/inputmethod/keyboard/internal/KeyboardTextsTable.java
 .git.dangling
 **/.git.dangling
 /native/correction/build-*/
+models/
